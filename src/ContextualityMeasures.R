@@ -30,14 +30,14 @@ checkConnections <- function (x) {
     for (iiName in namesProperties) {
 
         contextsIiName  <- sapply(x,
-                                 function (y) iiName %in% names(dimnames(y)))
+                                  function (y) iiName %in% names(dimnames(y)))
 
         dimensionIiName <- sapply(x[contextsIiName],
                                   function (y) which(names(dimnames(y)) %in% iiName))
 
         valuesIiName    <- sapply(lapply(x[contextsIiName],
-                                      function (y) dimnames(y)),
-                               function(z) z[iiName])
+                                         function (y) dimnames(y)),
+                                  function(z) z[iiName])
 
         for (iiContext in seq(length(valuesIiName))) {
             if (iiContext < length(valuesIiName)) {
@@ -166,7 +166,7 @@ RVSystem <- function (...) {
 #'
 #'
 #' @param x an RVSystem
-#' @return
+#' @return A cntMatrices object
 #' @examples
 cntMatrices <- function (x) {
 
@@ -458,6 +458,7 @@ isCntMatrices <- function (x) {
 #'
 #'
 #' @param x a cntMatrices object
+#' @return A Cnt.Meas object with the CNT1 measure
 CNT1 <- function (x) {
     if (suppressMessages(isCntMatrices(x))) {
         require('Rglpk')
@@ -511,6 +512,7 @@ CNT1 <- function (x) {
 #'
 #'
 #' @param x a cntMatrices object
+#' @return A Cnt.Meas object with the CNT2 measure
 CNT2 <- function (x) {
     if (suppressMessages(isCntMatrices(x))) {
         require('Rglpk')
@@ -580,7 +582,8 @@ CNT2 <- function (x) {
 #'         It will return 0 for the optimal solution being found, and non-zero otherwise.
 #'
 #' @param x a cntMatrices object
-#' @param y optional linear programming solution of a coupling for the system
+#' @param coupling optional linear programming solution of a coupling for the system (Rglpk_solve_LP or FindCoupling)
+#' @return A Cnt.Meas object with the NCNT2 measure
 NCNT2 <- function (x, coupling = NULL) {
 
     if (suppressMessages(isCntMatrices(x))) {
@@ -667,6 +670,7 @@ NCNT2 <- function (x, coupling = NULL) {
 #'
 #'
 #' @param x a cntMatrices object
+#' @return A Cnt.Meas object with the CNT3 measure
 CNT3 <- function (x) {
     if (suppressMessages(isCntMatrices(x))) {
         require('Rglpk')
@@ -713,6 +717,7 @@ CNT3 <- function (x) {
 #'         It will return 0 for the optimal solution being found, and non-zero otherwise.
 #'
 #' @param x a cntMatrices object
+#' @return List with solution and status from Rglpk_solve_LP optimization
 FindCoupling <- function (x) {
 
     if (suppressMessages(isCntMatrices(x))) {
@@ -742,6 +747,7 @@ FindCoupling <- function (x) {
 #' S1Function(x) returns the maximal sum with odd number of sign changes
 #'
 #' @param x a numeric vector
+#' @return numeric
 S1Function <- function (x)  {
 
     if (any(is.na(x))) {
@@ -790,6 +796,7 @@ S1Function <- function (x)  {
 #' @param x a DRVSystem object or a cntMatrices object
 #' @param values if NULL (Default), random variables are assumed to take values 1 (for the reference category)
 #' and -1 for the other category
+#' @return numeric
 SimpleMSBinaryCyclic <- function(x, values = NULL) {
 
     if (!is.null(values)) {
@@ -847,6 +854,7 @@ SimpleMSBinaryCyclic <- function(x, values = NULL) {
 #' @param x a DRVSystem object or a cntMatrices object
 #' @param values if NULL (Default), random variables are assumed to take values 1 (for the reference category)
 #' and -1 for the other category
+#' @return List with limits for n-dimensional rectangle
 RectangleProduct <- function(x, values = NULL) {
 
     if (!is.null(values)) {
@@ -904,6 +912,7 @@ RectangleProduct <- function(x, values = NULL) {
 #' @param x a DRVSystem object or a cntMatrices object
 #' @param values if NULL (Default), random variables are assumed to take values 1 (for the reference category)
 #' and -1 for the other category
+#' @return numeric
 RectangleProductDistance <- function(x, values = NULL) {
 
     if (!is.null(values)) {
@@ -966,6 +975,7 @@ RectangleProductDistance <- function(x, values = NULL) {
 #' @param x a DRVSystem object or a cntMatrices object
 #' @param values if NULL (Default), random variables are assumed to take values 1 (for the reference category)
 #' and -1 for the other category
+#' @return numeric
 DeltaCFunction <- function(x, values = NULL) {
 
     if (suppressMessages(isDRVSystem(x))) {
@@ -1029,7 +1039,7 @@ DeltaCFunction <- function(x, values = NULL) {
 #'
 #'
 #' @param x an RVSystem
-#' @return
+#' @return a cntMatrices object
 #' @examples
 cntFracMatrices <- function (x) {
 
@@ -1207,6 +1217,13 @@ cntFracMatrices <- function (x) {
 
 
 
+
+#' Print the value of the (non)contextuality measure from a Cnt.Meas object
+#'
+#' print.Cnt.Meas(x) prints the value of a (non)contextuality measure
+#'
+#'
+#' @param x a Cnt.Meas object
 print.Cnt.Meas <- function (x) {
     if (class(x) == 'Cnt.Meas') {
         measure <- names(x)[grep('CNT|delta', names(x))]
@@ -1216,6 +1233,14 @@ print.Cnt.Meas <- function (x) {
 
 
 
+#' Compute the CbD (non)contextuality measures for a DRVSystem or a cntMatrices object
+#'
+#' CbDMeasures(x) returns a list containnig the values of the (non)contextuality measures for x
+#'
+#' @param x A DRVSystem or cntMatrices object
+#' @return A list containing the values of the measures CNT1, CNT2, CNT3, NCNT2.
+#'  If x is cyclic systems, also includes the Delta (CHSH-type) inequality and
+#'  the distance from the system to the n-dimensional rectangle
 CbDMeasures <- function (x) {
     if (suppressMessages(isDRVSystem(x))) {
         x <- cntMatrices(x)
@@ -1232,7 +1257,7 @@ CbDMeasures <- function (x) {
             NCNT2 = NCNT2(x)[['NCNT2']]
         )
 
-        if (!grep('Error', deltaX)) {
+        if (length(grep('Error', deltaX)) < 1) {
             output[['Delta']] <- deltaX[['deltaC']]
             output[['mA']] <- deltaX[['mA']]
         }
@@ -1242,6 +1267,226 @@ CbDMeasures <- function (x) {
 
     } else {
         stop('x is not a DRVSystem or a cntMatrices object')
+    }
+}
+
+
+
+#' Generate cyclic systems with the underlying structure of a maximally contextual
+#' cyclic system of the given rank
+#'
+#' cyclicRVSystem(n) returns an RVSystem object that is dichotomous and cyclic
+#'
+#' @param n integer greater or equal to 2
+#' @param refTable
+#' @param negTable
+#' @return a cyclic DRVSystem of rank n
+cyclicRVSystem <- function (n, refTable = NULL, negTable = NULL) {
+
+    if (is.null(refTable)) {
+        refTable <- as.table(diag(2)) / 2
+    }
+
+    if (is.null(negTable)) {
+        negTable <- refTable[2:1, ]
+    }
+
+    varNames <- LETTERS[c(1:n, 1)]
+
+    rvSystem <- do.call(RVSystem, lapply(as.list(
+        c(rep('refTable', n - 1),
+          'negTable')),
+        as.name))
+
+    for (iiContext in seq_along(rvSystem)) {
+        dimnames(rvSystem[[iiContext]])[[1]] <-
+            dimnames(rvSystem[[iiContext]])[[2]] <-
+            c('-1', '1')
+        names(dimnames(rvSystem[[iiContext]])) <- varNames[c(iiContext, iiContext + 1)]
+    }
+
+    return(rvSystem)
+
+}
+
+
+
+#' Generates two 2x2 prop.tables with given margins
+#' (for a reference category) and a given probability of
+#' the conjunction (of both reference categories)
+#'
+#' generateRefFerTables(product, margin1, margin2)
+#'
+#' @param product numeric between 0 and 1
+#' @param margin1 numeric between 0 and 1
+#' @param margin2 numeric between 0 and 1
+#'
+#' @return A list with prop.tables refTable and ferTable
+generateRefFerTables <- function(product = 0.5, margin1 = 0.5, margin2 = 0.5) {
+    if (product > margin1 || product > margin2) {
+        stop("product cell needs to have a smaller probability than each margin")
+    }
+    if (product > 1 || product < 0 || margin1 > 1 || margin1 < 0 || margin2 > 1 ||
+        margin2 < 0) {
+        stop("product and margins need to be probabilities")
+    }
+
+    if (product < (margin1 + margin2 - 1)) {
+        stop("product cell needs to have a larger probability than 1 minus the sum of the margins")
+    }
+
+    maxProd <- min(margin1, margin2)
+    minProd <- max(0, margin1 + margin2 - 1)
+
+    epsilon <- maxProd - product
+
+    ferTable <- as.table(matrix(c(1 - margin1 - margin2 + maxProd - epsilon,
+                                  margin1 - maxProd + epsilon,
+                                  margin2 - maxProd + epsilon,
+                                  maxProd - epsilon),
+                                ncol = 2))
+    refTable <-  as.table(matrix(c(1 - margin1 - margin2 + minProd + epsilon,
+                                   margin1 - minProd - epsilon,
+                                   margin2 - minProd - epsilon,
+                                   minProd + epsilon),
+                                 ncol = 2))
+
+    output <- list(refTable = refTable, ferTable = ferTable)
+
+    return(output)
+}
+
+
+
+#' checks whether x gives the structure of a PR box
+#'
+#' isPRStructure(x)
+#'
+#' @param x a binary table
+#' @return logical
+isPRStructure <- function (x) {
+    test <- TRUE
+    if (!is.table(x) & !is.matrix(x)) {
+        message('x should be a table or a matrix')
+        test <- FALSE
+    }
+
+    if (nrow(x) != ncol(x)) {
+        message('x should be a square table')
+        test <- FALSE
+    }
+
+    if (!all(x %in% c(0, 1))) {
+        message('x should contain only 0s or 1s')
+        test <- FALSE
+    }
+
+    if (sum(diag(x[-1, ])) != 0) {
+        message('x should contain only 0s in the main subdiagonal')
+        test <- FALSE
+    }
+
+    n <- ncol(x)
+
+    if (sum(x) != (n^2 - n + 1)) {
+        message('x should contain ', n^2 - n + 1, ' 1s')
+        test <- FALSE
+    }
+
+    if (!is.null(rownames(x))) {
+        namesDim <- unique(c(rownames(x), colnames(x)))
+        if (length(namesDim) != (nrow(x) + ncol(x))) {
+            message('Each row and column of x should have a unique name')
+            test <- FALSE
+        }
+    }
+
+    return(test)
+}
+
+
+#' Generates a nxn table that gives the structure of an n-PR box
+#' arXiv:1903.07170v5 # for several non-cyclic systems based on PR boxes
+#' by Brunner, Scarani & Gisin (2006) doi:10.1063/1.2352857
+#'
+#' generatePRBoxNStructure(n)
+#'
+#' @param n an integer equal or greater than 2 (e.g. 2L, 4L)
+#' @return nxn table of zeros and ones with the structure for a n-PR box
+generatePRBoxNStructure <- function (n) {
+
+    if (!is.integer(n) || (n < 2)) {
+        stop('n should be at least 2')
+    }
+
+
+    x <- matrix(data = 1, nrow = n, ncol = n)
+    y <- matrix(data = seq(n^2), nrow = n, ncol = n)
+
+    x[diag(y[-1, , drop = FALSE])] <- 0
+
+    rownames(x) <- paste0('A', seq(nrow(x)))
+    colnames(x) <- paste0('B', seq(nrow(x)))
+
+    return(x)
+}
+
+
+
+#' Generates a RVSystem with the structure of an n-PR box
+#' populated by joint distributions given by refTable, negTable and chgTable
+#' or perfectly (anti)correlated joint distributions (i.e, the PR box system) if all are NULL
+#'
+#' @param PRBoxStructure a table giving a PRBoxStruvture (see isPRStructure)
+#' @param posTable a prop.table that will be used for all entries of PRBoxStructure equal to 1
+#' @param negTable a prop.table that will be used for all entries of PRBoxStructure equal to 0 (except when chgTable is not NULL)
+#' @param chgTable a prop.table that will be used for the first entry of PRBoxStructure that equals 0
+generatePRBoxLikeSystem <- function(PRBoxStructure, posTable = NULL, negTable = NULL, chgTable = NULL) {
+
+    if(suppressMessages(isPRStructure(PRBoxStructure))) {
+
+        if (is.null(posTable)) {
+            posTable <- as.table(diag(2)) / 2
+        }
+
+        if (is.null(negTable)) {
+            negTable <- posTable[2:1, ]
+        }
+
+        if (is.null(chgTable)) {
+            chgTable <- negTable
+        }
+
+        listJoints <- list()
+        rows <- row(PRBoxStructure)
+        cols <- col(PRBoxStructure)
+
+
+        jjOddCtx <- 1
+        for (iiContext in seq_along(PRBoxStructure)) {
+            if (PRBoxStructure[iiContext] == 1) {
+                listJoints[[iiContext]] <- posTable
+            } else {
+                if (jjOddCtx == 1) {
+                    listJoints[[iiContext]] <- chgTable
+                    jjOddCtx <- 0
+                } else {
+                    listJoints[[iiContext]] <- negTable
+                }
+            }
+
+            names(dimnames(listJoints[[iiContext]])) <-
+                c(rownames(PRBoxStructure)[rows[iiContext]],
+                  colnames(PRBoxStructure)[cols[iiContext]])
+
+            dimnames(listJoints[[iiContext]])[[1]] <-
+                dimnames(listJoints[[iiContext]])[[2]] <-
+                c('-1', '1')
+        }
+
+        out <- do.call(RVSystem, listJoints)
+
+        return(out)
     }
 }
 

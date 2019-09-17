@@ -12,1304 +12,324 @@
 library('ggplot2')
 library('dplyr')
 
-source('./ContextualityMeasures.R')
+source('./src/ContextualityMeasures.R')
 
-
-cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
-
-measureLabels <- c('Delta', 'mA', 'CNT1', 'CNT2', 'CNT3', 'NCNT2',
-                   'Delta/CNT2', '-Delta/NCNT2', 'mADelta/NCNT2', 'minDelta/NCNT2', 'CNT1/CNT2', '2*CNT2/CNT3')
 
 ################################################################################
-# # Generate cyclic system of rank n
+# #  Functions
 ################################################################################
 
-#' Generate cyclic systems with the underlying structure of a maximally contextual
-#' cyclic system of the given rank
-#'
-#' cyclicRVSystem(n) returns an RVSystem object that is dichotomous and cyclic
-#'
-#' @param n integer greater or equal to 2
-#' @param refTable
-#' @param negTable
-#' @return a cyclic DRVSystem of rank n
-cyclicRVSystem <- function (n, refTable = NULL, negTable = NULL) {
+generateSequenceCyclicSystemsCNT2 <- function (nCors, maxRank = 2,
+                                               margin1 = NULL, margin2 = NULL,
+                                               varying = 'all') {
 
-    if (is.null(refTable)) {
-        refTable <- as.table(diag(2)) / 2
+
+    if (is.null(margin1)) {
+        margin1 <- 0.5
+    }
+    if (is.null(margin2)) {
+        margin2 <- 0.5
     }
 
-    if (is.null(negTable)) {
-        negTable <- refTable[2:1, ]
+    listReFerTables <- list()
+
+    if (length(nCors) == 1) {
+        products <- seq(to   = min(margin1, margin2),
+                        from = max(0, margin1 + margin2 - 1),
+                        length.out = nCors)
+    } else {
+        minCoup <- max(0, margin1 + margin2 - 1)
+        maxCoup <- min(margin1, margin2)
+        products <- (maxCoup - minCoup) * nCors + minCoup
     }
 
-    varNames <- LETTERS[c(1:n, 1)]
+for (iiProduct in seq_along(products)) {
+    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct],
+                                                         margin1 = margin1,
+                                                         margin2 = margin2)
+    traveledDistance <- (products[iiProduct] - min(products)) / (max(products) - min(products))
+    names(listReFerTables)[iiProduct] <- sprintf('%.3f', traveledDistance)
+}
 
-    rvSystem <- do.call(RVSystem, lapply(as.list(
-        c(rep('refTable', n - 1),
-          'negTable')),
-        as.name))
+measuresVaryingCor <- list()
 
-    for (iiContext in seq_along(rvSystem)) {
-        dimnames(rvSystem[[iiContext]])[[1]] <-
-            dimnames(rvSystem[[iiContext]])[[2]] <-
-            c('-1', '1')
-        names(dimnames(rvSystem[[iiContext]])) <- varNames[c(iiContext, iiContext + 1)]
+for (iiRank in seq(maxRank)) {
+
+    measuresVaryingCor[[iiRank]] <- list()
+    for (jjCor in seq(nCors)) {
+
+        if (varying == 'one') {
+            jjRef <- 1
+            jjFer <- 1
+        } else {
+            jjRef <- jjCor
+            jjFer <- jjCor
+        }
+
+        if ((iiRank %% 2) == 0) {
+            # Odd rank systems
+            refTable <- listReFerTables[[jjFer]][['ferTable']]
+            negTable <- listReFerTables[[jjCor]][['ferTable']]
+        } else {
+            # Even rank systems
+            refTable <- listReFerTables[[jjRef]][['ferTable']]
+            negTable <- listReFerTables[[jjCor]][['refTable']]
+        }
+
+        measuresVaryingCor[[iiRank]][[jjCor]] <- CNT2Cyclic(
+            cyclicRVSystem(n = iiRank + 1,
+                           refTable = refTable,
+                           negTable = negTable)
+        )
     }
 
-    return(rvSystem)
+    measuresVaryingCor[[iiRank]] <- do.call('rbind', measuresVaryingCor[[iiRank]])
+    measuresVaryingCor[[iiRank]][, 'Distance'] <- names(listReFerTables)
+    measuresVaryingCor[[iiRank]][, 'Rank'] <- iiRank + 1
+}
 
+measuresVaryingCorLong <- do.call('rbind', measuresVaryingCor)
+
+return(measuresVaryingCorLong)
 }
 
 
+#' Compute the noncontextuality measure NCNT2
+#'
+#' CNT2Cyclic(x) returns a list containing:
+#'     NCNT2: The value of the NCNT2 noncontextuality measure
+#'     solution: The solution found for optimal coupling
+#'     status: Whether the solution was successfully found in the linear programming task.
+#'         It will return 0 for the optimal solution being found, and non-zero otherwise.
+#'
+#' @param x a cntMatrices object
+#' @param coupling optional linear programming solution of a coupling for the system (Rglpk_solve_LP or FindCoupling)
+#' @return A Cnt.Meas object with the NCNT2 measure
+CNT2Cyclic <- function(x) {
 
-generateRefFerTables <- function (product = 0.5, margin1 = 0.5, margin2 = 0.5) {
-    if (product > margin1 || product > margin2) {
-        stop('product cell needs to have a smaller probability than each margin')
+    if (suppressMessages(isDRVSystem(x))) {
+        x <- cntMatrices(x)
     }
-    if (product > 1 || product < 0 || margin1 > 1 || margin1 < 0 || margin2 > 1 || margin2 < 0) {
-        stop('product and margins need to be probabilities')
+
+    if (suppressMessages(isCntMatrices(x))) {
+        deltaX <- suppressWarnings(try(DeltaCFunction(x), silent = TRUE))
     }
 
-    refTable <- as.table(matrix(c(product, margin1 - product, margin2 - product, 1 - margin1 - margin2 + product), ncol = 2))
-    ferTable <- refTable[2:1, ]
+    deltaX <- lapply(deltaX[c('deltaC', 'mA')], round, 8)
 
-    output <- list(refTable = refTable, ferTable = ferTable)
+    CNT2 <- round(ifelse(deltaX[['deltaC']] > 0, deltaX[['deltaC']],
+                   max(deltaX[['deltaC']],
+                       -deltaX[['mA']])), 8)
+
+    if (CNT2 <= 0) {
+        if (CNT2 == deltaX[['deltaC']]) {
+            if (deltaX[['mA']] == deltaX[['deltaC']]) {
+                systemType <- 'Noncontextual - Close to face and boundary'
+            } else {
+                systemType <- 'Noncontextual - Close to face'
+            }
+        } else {
+            systemType <- 'Noncontextual - Close to boundary'
+        }
+    } else {
+        systemType <- 'Contextual'
+    }
+
+    output <- data.frame('N_CNT2' = CNT2 / 4,
+                         systemType = systemType)
 
     return(output)
 }
 
 
 
-################################################################################
-# #  Maximally contextual systems CbD measures
-################################################################################
+plotTravel <- function (x, parity = 'odd', ncnt = 'together') {
 
-maximallyContextualSystems <- list()
+    measuresVaryingCorLong <- x
+    if (parity == 'odd') {
+        parity <- 1
+    } else {
+        parity <- 0
+    }
 
-maxRank <- 6 # actually maxRank - 1
+    figureData <- filter(measuresVaryingCorLong,
+                         Rank %% 2 == parity)
 
-for (iiRank in seq(maxRank)) {
-    maximallyContextualSystems[[iiRank]] <- sapply(CbDMeasures(cyclicRVSystem(n = iiRank + 1)),
-                                                   function (y) y[1])
+
+    figureData <- mutate(figureData,
+                         'Type_pos'      = c(as.character(figureData[-1, 'systemType']), ''),
+                         'Type_prev'     = c('', as.character(figureData[-nrow(figureData), 'systemType'])),
+                         Changed         = ifelse(systemType == Type_prev,
+                                                  'same',
+                                                  'different'),
+                         Changes         = ifelse(systemType == Type_pos,
+                                                  'same',
+                                                  'different'),
+                         N_CNT2          = round(N_CNT2, 4))
+
+    group_by(figureData, Rank) %>% mutate(minimal = N_CNT2 == min(N_CNT2)) ->
+        figureData
+
+    figureData <- filter(as.data.frame(unclass(figureData)),
+                         Changed == 'different' | Changes == 'different' |
+                             minimal |
+                             Distance == '0.000' | Distance == '1.000')
+
+    figureData <- mutate(ungroup(figureData),
+                         'N_CNT2.end'    = c(figureData[-1, 'N_CNT2'], NA),
+                         'Distance.end'  = c(as.character(figureData[-1, 'Distance']), NA))
+
+    figureData <- figureData[-nrow(figureData), ]
+    figureData <- figureData[!(figureData[, 'Distance.end'] == '0.000'), ]
+
+    figureData <- mutate(figureData,
+                         Type = ifelse((N_CNT2 * N_CNT2.end) < 0,
+                                       'No plot',
+                                       ifelse(!((N_CNT2 <= 0) | (N_CNT2.end <= 0)),
+                                       'Contextual',
+                                       ifelse(N_CNT2.end < N_CNT2,
+                                              as.character(Type_pos),
+                                              as.character(systemType)))))
+
+    figureData <- mutate(figureData,
+                         Measure = ifelse((N_CNT2 <= 0) & (N_CNT2.end <= 0),
+                                          'NCNT2', 'CNT2')) %>%
+        select(Rank, Type, Measure, N_CNT2, N_CNT2.end, Distance, Distance.end)
+
+    figureTypeCon   <- filter(figureData, Type == 'Contextual')
+    figureTypeFace  <- filter(figureData, grepl('face', Type))
+    figureTypeBound <- filter(figureData, grepl('boundary', Type) & !grepl('face', Type))
+
+
+    if (ncnt == 'together') {
+        cnt2Fig <- ggplot(figureData, aes(x = as.numeric(as.character(Distance)), y = N_CNT2)) +
+            ylim(-0.25, 0.5) + xlim(0, 1)
+        if (nrow(figureTypeCon) > 0) {
+            cnt2Fig <- cnt2Fig + geom_segment(data = figureTypeCon,
+                                              aes(x = as.numeric(as.character(Distance)),
+                                                  xend = as.numeric(as.character(Distance.end)),
+                                                  y = N_CNT2, yend = N_CNT2.end),
+                                              linetype = 1)
+        }
+        if (nrow(figureTypeFace) > 0) {
+            cnt2Fig <- cnt2Fig + geom_segment(data = figureTypeFace,
+                                              aes(x = as.numeric(as.character(Distance)),
+                                                  xend = as.numeric(as.character(Distance.end)),
+                                                  y = N_CNT2, yend = N_CNT2.end),
+                                              linetype = 3)
+        }
+        if (nrow(figureTypeBound) > 0) {
+            cnt2Fig <- cnt2Fig + geom_segment(data = figureTypeBound,
+                                              aes(x = as.numeric(as.character(Distance)),
+                                                  xend = as.numeric(as.character(Distance.end)),
+                                                  y = N_CNT2, yend = N_CNT2.end),
+                                              linetype = 6)
+        }
+
+        cnt2Fig <- cnt2Fig + facet_wrap(. ~ Rank,
+                                        labeller = labeller(Rank = label_both))
+    } else {
+        cnt2Fig <- ggplot(figureData, aes(x = as.numeric(as.character(Distance)), y = abs(N_CNT2))) +
+            ylim(0, 0.5) + xlim(0, 1)
+        if (nrow(figureTypeCon) > 0) {
+            cnt2Fig <- cnt2Fig + geom_segment(data = figureTypeCon,
+                                              aes(x = as.numeric(as.character(Distance)),
+                                                  xend = as.numeric(as.character(Distance.end)),
+                                                  y = abs(N_CNT2), yend = abs(N_CNT2.end)),
+                                              linetype = 1)
+        }
+        if (nrow(figureTypeFace) > 0) {
+            cnt2Fig <- cnt2Fig + geom_segment(data = figureTypeFace,
+                                              aes(x = as.numeric(as.character(Distance)),
+                                                  xend = as.numeric(as.character(Distance.end)),
+                                                  y = abs(N_CNT2), yend = abs(N_CNT2.end)),
+                                              linetype = 3)
+        }
+        if (nrow(figureTypeBound) > 0) {
+            cnt2Fig <- cnt2Fig + geom_segment(data = figureTypeBound,
+                                              aes(x = as.numeric(as.character(Distance)),
+                                                  xend = as.numeric(as.character(Distance.end)),
+                                                  y = abs(N_CNT2), yend = abs(N_CNT2.end)),
+                                              linetype = 6)
+        }
+
+        cnt2Fig <- cnt2Fig + facet_grid(Measure ~ Rank, scales = 'free_y',
+                                        labeller = labeller(Rank = label_both))
+    }
+
+    cnt2Fig <- cnt2Fig +
+        xlab('Proportion of distance traversed') +
+        ylab('Value') +
+        scale_colour_brewer(palette="Dark2")
+
 }
-
-names(maximallyContextualSystems) <- paste0('Value.', seq_along(maximallyContextualSystems) + 1)
-
-maximallyContextualSystems <- as.data.frame(maximallyContextualSystems)
-
-maximallyContextualSystems['CNT1/CNT2', ] <-
-    maximallyContextualSystems['CNT1', ] /
-    maximallyContextualSystems['CNT2', ]
-
-maximallyContextualSystems['2*CNT2/CNT3', ] <-
-    2 * maximallyContextualSystems['CNT2', ] /
-    maximallyContextualSystems['CNT3', ]
-
-maximallyContextualSystems['Delta/CNT2', ] <-
-    maximallyContextualSystems['Delta', ] /
-    maximallyContextualSystems['CNT2', ]
-
-maximallyContextualSystems['Delta/NCNT2', ] <-
-    maximallyContextualSystems['Delta', ] /
-    maximallyContextualSystems['NCNT2', ]
-
-
-maximallyContextualSystems[, 'Measure'] <- rownames(maximallyContextualSystems)
-maximallyContextualSystems[, 'Measure'] <- ordered(maximallyContextualSystems[, 'Measure'],
-                                                   levels = measureLabels)
-
-
-maximallyContextualSystemsLong <- reshape(maximallyContextualSystems, direction = 'long',
-                                          varying = grep('Value', names(maximallyContextualSystems)),
-                                          timevar = 'Rank')
-
-
-
-figureData <- filter(maximallyContextualSystemsLong,
-                     grepl('/C|Delta$', maximallyContextualSystemsLong[, 'Measure']))
-
-maximalFig <- ggplot(figureData, aes(x = Rank, y = Value)) +
-    geom_line(aes(colour = Measure, linetype = Measure)) +
-    scale_x_continuous(breaks = seq(2, maxRank + 1)) +
-    scale_y_continuous(breaks = seq(1, maxRank), limits = c(0, maxRank)) +
-    scale_colour_brewer(palette="Dark2")
-
-
-ggsave(filename = '../output/maximallyContextual.png',
-       plot = maximalFig,
-       width = 6, height = 4)
 
 
 ################################################################################
 # #  Constant |cor| varying cor from 1 in refTable (-1 in ferTable) to -1 (1)
 ################################################################################
 
-nCors <- 35
+epsi <- c(-1.2e-3, 1.2e-3)
+nCors <- sort(c(0, 1/2 + epsi, 1/3 + epsi, 1/4 + epsi, 1/5 + epsi, 1/6 + epsi, 1/7 + epsi, 2/3, 3/4 + epsi, 4/5, 5/6 + epsi, 1))
+maxRank <- 6 #Actually maxRank - 1. So this goes 2 - 7
 
-listReFerTables <- list()
-products <- seq(from = 0.5, to = 0, length.out = nCors)
+measuresVaryingCorLongCons <- generateSequenceCyclicSystemsCNT2(nCors = nCors, maxRank = maxRank,
+                                                                margin1 = 0.5, margin2 = 0.5, varying = 'all')
 
-for (iiProduct in seq_along(products)) {
-    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct])
-    names(listReFerTables)[iiProduct] <- sprintf('%.3f', ((4 * products[iiProduct]) - 1))
+togetherEvenFig <- plotTravel(x = measuresVaryingCorLongCons, parity = 'even', ncnt = 'together')
+separateEvenFig <- plotTravel(x = measuresVaryingCorLongCons, parity = 'even', ncnt = 'separate')
 
-}
-
-
-measuresVaryingCor <- list()
-
-for (iiRank in seq(maxRank)) {
-
-    measuresVaryingCor[[iiRank]] <- list()
-    for (jjCor in seq(nCors)) {
-
-        refTable <- listReFerTables[[jjCor]][['refTable']]
-        if ((iiRank %% 2) == 0) {
-            negTable <- listReFerTables[[jjCor]][['refTable']]
-        } else {
-            negTable <- listReFerTables[[jjCor]][['ferTable']]
-        }
-
-        measuresVaryingCor[[iiRank]][[jjCor]] <- sapply(CbDMeasures(
-            cyclicRVSystem(n = iiRank + 1,
-                           refTable = refTable,
-                           negTable = negTable)),
-            function (y) y[1])
-    }
-
-    names(measuresVaryingCor[[iiRank]]) <- paste0('Value.', seq(nCors))
-
-    measuresVaryingCor[[iiRank]] <- as.data.frame(measuresVaryingCor[[iiRank]])
-
-    measuresVaryingCor[[iiRank]]['CNT1/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['CNT1', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['2*CNT2/CNT3', ] <-
-        2 * measuresVaryingCor[[iiRank]]['CNT2', ] /
-        measuresVaryingCor[[iiRank]]['CNT3', ]
-
-    measuresVaryingCor[[iiRank]]['Delta/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['-Delta/NCNT2', ] <-
-        -measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['mADelta/NCNT2', ] <-
-        measuresVaryingCor[[iiRank]]['mA', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['minDelta/NCNT2', ] <-
-        apply(measuresVaryingCor[[iiRank]][c('mADelta/NCNT2', '-Delta/NCNT2'), ],
-              2, min)
+togetherOddFig <- plotTravel(x = measuresVaryingCorLongCons, parity = 'odd', ncnt = 'together')
+separateOddFig <- plotTravel(x = measuresVaryingCorLongCons, parity = 'odd', ncnt = 'separate')
 
 
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- rownames(measuresVaryingCor[[iiRank]])
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- ordered(measuresVaryingCor[[iiRank]][, 'Measure'],
-                                                         levels = measureLabels)
+ggsave(filename = './output/cyclicSystems_Consistent_Constant_correlation_Lines_together_Even_rank.png',
+       plot = togetherEvenFig,
+       width = 6.5, height = 4.0)
 
+ggsave(filename = './output/cyclicSystems_Consistent_Constant_correlation_Lines_separate_Even_rank.png',
+       plot = separateEvenFig,
+       width = 7.5, height = 4.5)
 
-    measuresVaryingCor[[iiRank]] <- reshape(measuresVaryingCor[[iiRank]], direction = 'long',
-                                            varying = grep('Value', names(measuresVaryingCor[[iiRank]])),
-                                            timevar = 'Expectation')
+ggsave(filename = './output/cyclicSystems_Consistent_Constant_correlation_Lines_together_Odd_rank.png',
+       plot = togetherOddFig,
+       width = 6.5, height = 4.0)
 
-    measuresVaryingCor[[iiRank]][, 'Expectation'] <- names(listReFerTables)[measuresVaryingCor[[iiRank]][, 'Expectation']]
+ggsave(filename = './output/cyclicSystems_Consistent_Constant_correlation_Lines_separate_Odd_rank.png',
+       plot = separateOddFig,
+       width = 7.5, height = 4.5)
 
-    measuresVaryingCor[[iiRank]][abs(measuresVaryingCor[[iiRank]][, 'Value']) == 'Inf', 'Value'] <- NaN
-    measuresVaryingCor[[iiRank]][(!is.nan(measuresVaryingCor[[iiRank]][, 'Value'])) &
-                                     (abs(measuresVaryingCor[[iiRank]][, 'Value']) < (10 * .Machine$double.eps)), 'Value'] <- 0
-
-    measuresVaryingCor[[iiRank]][, 'Rank'] <- iiRank + 1
-
-}
-
-measuresVaryingCorLong <- do.call('rbind', measuresVaryingCor)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('CNT./|^Delta|min', measuresVaryingCorLong[, 'Measure']))
-
-varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Common expectation of the product') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/constantAbsCorRatios.png', plot = varCorFig,
-       width = 11, height = 6.5)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('Delta$|^.?CNT.$', measuresVaryingCorLong[, 'Measure']))
-
-measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Common expectation of the product') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/constantAbsCorMeasures.png', plot = measCorFig,
-       width = 11, height = 6.5)
 
 
 ################################################################################
-# #  Consistently connected. Varying one context from perfect contextual system
+# #  Inconsistently connected systems - Margins .55 and .4  - Constant correlations
 ################################################################################
 
-nCors <- 35
+nCors <- sort(c(0, 1/32 + epsi, 1/24, 5/16 + epsi, 11/16 + epsi, 1/2, 1/4, 1/6 + epsi, 1))
 
-listReFerTables <- list()
-products <- seq(from = 0.5, to = 0, length.out = nCors)
+measuresVaryingCorLongInc <- generateSequenceCyclicSystemsCNT2(nCors = nCors, maxRank = maxRank,
+                                                               margin1 = 0.55, margin2 = 0.4, varying = 'all')
 
-for (iiProduct in seq_along(products)) {
-    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct])
-    names(listReFerTables)[iiProduct] <- sprintf('%.3f', ((4 * products[iiProduct]) - 1))
+togetherEvenFig <- plotTravel(x = measuresVaryingCorLongInc, parity = 'even', ncnt = 'together')
+separateEvenFig <- plotTravel(x = measuresVaryingCorLongInc, parity = 'even', ncnt = 'separate')
 
-}
+togetherOddFig <- plotTravel(x = measuresVaryingCorLongInc, parity = 'odd', ncnt = 'together')
+separateOddFig <- plotTravel(x = measuresVaryingCorLongInc, parity = 'odd', ncnt = 'separate')
 
 
-measuresVaryingCor <- list()
+ggsave(filename = './output/cyclicSystems_Inconsistent_0.55-0.4_Constant_correlation_Lines_together_Even_rank.png',
+       plot = togetherEvenFig,
+       width = 6.5, height = 4.0)
 
-for (iiRank in seq(maxRank)) {
-    measuresVaryingCor[[iiRank]] <- list()
-    for (jjCor in seq(nCors)) {
+ggsave(filename = './output/cyclicSystems_Inconsistent_0.55-0.4_Constant_correlation_Lines_separate_Even_rank.png',
+       plot = separateEvenFig,
+       width = 7.5, height = 4.5)
 
-        refTable <- listReFerTables[[jjCor]][[1]]
-        if (iiRank %% 2) {
-            negTable <- listReFerTables[[jjCor]][[1]]
-        } else {
-            negTable <- listReFerTables[[jjCor]][['ferTable']]
-        }
+ggsave(filename = './output/cyclicSystems_Inconsistent_0.55-0.4_Constant_correlation_Lines_together_Odd_rank.png',
+       plot = togetherOddFig,
+       width = 6.5, height = 4.0)
 
-        measuresVaryingCor[[iiRank]][[jjCor]] <- sapply(CbDMeasures(
-            cyclicRVSystem(n = iiRank + 1,
-                           refTable = refTable,
-                           negTable = negTable)),
-            function (y) y[1])
-    }
-
-    names(measuresVaryingCor[[iiRank]]) <- paste0('Value.', seq(nCors))
-
-    measuresVaryingCor[[iiRank]] <- as.data.frame(measuresVaryingCor[[iiRank]])
-
-    measuresVaryingCor[[iiRank]]['CNT1/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['CNT1', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['2*CNT2/CNT3', ] <-
-        2 * measuresVaryingCor[[iiRank]]['CNT2', ] /
-        measuresVaryingCor[[iiRank]]['CNT3', ]
-
-    measuresVaryingCor[[iiRank]]['Delta/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['-Delta/NCNT2', ] <-
-        -measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['mADelta/NCNT2', ] <-
-        measuresVaryingCor[[iiRank]]['mA', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['minDelta/NCNT2', ] <-
-        apply(measuresVaryingCor[[iiRank]][c('mADelta/NCNT2', '-Delta/NCNT2'), ],
-              2, min)
-
-
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- rownames(measuresVaryingCor[[iiRank]])
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- ordered(measuresVaryingCor[[iiRank]][, 'Measure'],
-                                                         levels = measureLabels)
-
-
-    measuresVaryingCor[[iiRank]] <- reshape(measuresVaryingCor[[iiRank]], direction = 'long',
-                                            varying = grep('Value', names(measuresVaryingCor[[iiRank]])),
-                                            timevar = 'Expectation')
-
-    measuresVaryingCor[[iiRank]][, 'Expectation'] <- names(listReFerTables)[measuresVaryingCor[[iiRank]][, 'Expectation']]
-
-    measuresVaryingCor[[iiRank]][abs(measuresVaryingCor[[iiRank]][, 'Value']) == 'Inf', 'Value'] <- NaN
-    measuresVaryingCor[[iiRank]][(!is.nan(measuresVaryingCor[[iiRank]][, 'Value'])) &
-                                     (abs(measuresVaryingCor[[iiRank]][, 'Value']) < (10 * .Machine$double.eps)), 'Value'] <- 0
-
-    measuresVaryingCor[[iiRank]][, 'Rank'] <- iiRank + 1
-
-}
-
-measuresVaryingCorLong <- do.call('rbind', measuresVaryingCor)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('CNT./|^Delta|min', measuresVaryingCorLong[, 'Measure']))
-
-varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Expectation of the product in varying context') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/consistentlyConnectedVarying1Ratios.png', plot = varCorFig,
-       width = 11, height = 6.5)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('Delta$|^.?CNT.$', measuresVaryingCorLong[, 'Measure']))
-
-measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Expectation of the product in varying context') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/consistentlyConnectedVarying1Measures.png', plot = measCorFig,
-       width = 11, height = 6.5)
-
-
-
-################################################################################
-# #  Inconsistently connected systems - Margins .3 and .7 a
-################################################################################
-
-nCors <- 35
-
-listReFerTables <- list()
-margin1 <- 0.3
-margin2 <- 0.7
-products <- seq(from = 0.3, to = 0, length.out = nCors)
-
-for (iiProduct in seq_along(products)) {
-    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct],
-                                                         margin1 = margin1,
-                                                         margin2 = margin2)
-    expectation <- (4 * products[iiProduct]) - (2 * (margin1 + margin2)) + 1
-    names(listReFerTables)[iiProduct] <- sprintf('%.3f', expectation)
-
-}
-
-
-measuresVaryingCor <- list()
-
-for (iiRank in seq(maxRank)) {
-    measuresVaryingCor[[iiRank]] <- list()
-    for (jjCor in seq(nCors)) {
-
-        refTable <- listReFerTables[[jjCor]][['refTable']]
-        if (iiRank %% 2) {
-            negTable <- listReFerTables[[jjCor]][['refTable']]
-        } else {
-            negTable <- listReFerTables[[jjCor]][['ferTable']]
-        }
-
-        measuresVaryingCor[[iiRank]][[jjCor]] <- sapply(CbDMeasures(
-            cyclicRVSystem(n = iiRank + 1,
-                           refTable = refTable,
-                           negTable = negTable)),
-            function (y) y[1])
-    }
-
-    names(measuresVaryingCor[[iiRank]]) <- paste0('Value.', seq(nCors))
-
-    measuresVaryingCor[[iiRank]] <- as.data.frame(measuresVaryingCor[[iiRank]])
-
-    measuresVaryingCor[[iiRank]]['CNT1/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['CNT1', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['2*CNT2/CNT3', ] <-
-        2 * measuresVaryingCor[[iiRank]]['CNT2', ] /
-        measuresVaryingCor[[iiRank]]['CNT3', ]
-
-    measuresVaryingCor[[iiRank]]['Delta/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['-Delta/NCNT2', ] <-
-        -measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['mADelta/NCNT2', ] <-
-        measuresVaryingCor[[iiRank]]['mA', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['minDelta/NCNT2', ] <-
-        apply(measuresVaryingCor[[iiRank]][c('mADelta/NCNT2', '-Delta/NCNT2'), ],
-              2, min)
-
-
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- rownames(measuresVaryingCor[[iiRank]])
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- ordered(measuresVaryingCor[[iiRank]][, 'Measure'],
-                                                         levels = measureLabels)
-
-
-    measuresVaryingCor[[iiRank]] <- reshape(measuresVaryingCor[[iiRank]], direction = 'long',
-                                            varying = grep('Value', names(measuresVaryingCor[[iiRank]])),
-                                            timevar = 'Expectation')
-
-    measuresVaryingCor[[iiRank]][, 'Expectation'] <- names(listReFerTables)[measuresVaryingCor[[iiRank]][, 'Expectation']]
-
-    measuresVaryingCor[[iiRank]][abs(measuresVaryingCor[[iiRank]][, 'Value']) == 'Inf', 'Value'] <- NaN
-    measuresVaryingCor[[iiRank]][(!is.nan(measuresVaryingCor[[iiRank]][, 'Value'])) &
-                                     (abs(measuresVaryingCor[[iiRank]][, 'Value']) < (10 * .Machine$double.eps)), 'Value'] <- 0
-
-    measuresVaryingCor[[iiRank]][, 'Rank'] <- iiRank + 1
-
-}
-
-measuresVaryingCorLong <- do.call('rbind', measuresVaryingCor)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('CNT./|^Delta|min', measuresVaryingCorLong[, 'Measure']))
-
-varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Common expectation of the product') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent3v7cyclicRatios.png', plot = varCorFig,
-       width = 11, height = 6.5)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('Delta$|^.?CNT.$', measuresVaryingCorLong[, 'Measure']))
-
-measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Common expectation of the product') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent3v7cyclicMeasures.png', plot = measCorFig,
-       width = 11, height = 6.5)
-
-
-
-################################################################################
-# #  Inconsistently connected systems - Margins .3 and .7 b
-################################################################################
-
-nCors <- 35
-
-listReFerTables <- list()
-margin1 <- 0.3
-margin2 <- 0.3
-products <- seq(from = 0.3, to = 0, length.out = nCors)
-
-for (iiProduct in seq_along(products)) {
-    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct],
-                                                         margin1 = margin1,
-                                                         margin2 = margin2)
-    expectation <- (4 * products[iiProduct]) - (2 * (margin1 + margin2)) + 1
-    names(listReFerTables)[iiProduct] <- sprintf('%.3f', expectation)
-
-}
-
-
-measuresVaryingCor <- list()
-
-for (iiRank in seq(maxRank)) {
-    measuresVaryingCor[[iiRank]] <- list()
-    for (jjCor in seq(nCors)) {
-
-        refTable <- listReFerTables[[jjCor]][['refTable']]
-        if (iiRank %% 2) {
-            negTable <- listReFerTables[[jjCor]][['refTable']]
-        } else {
-            negTable <- listReFerTables[[jjCor]][['ferTable']]
-        }
-
-        measuresVaryingCor[[iiRank]][[jjCor]] <- sapply(CbDMeasures(
-            cyclicRVSystem(n = iiRank + 1,
-                           refTable = refTable,
-                           negTable = negTable)),
-            function (y) y[1])
-    }
-
-    names(measuresVaryingCor[[iiRank]]) <- paste0('Value.', seq(nCors))
-
-    measuresVaryingCor[[iiRank]] <- as.data.frame(measuresVaryingCor[[iiRank]])
-
-    measuresVaryingCor[[iiRank]]['CNT1/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['CNT1', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['2*CNT2/CNT3', ] <-
-        2 * measuresVaryingCor[[iiRank]]['CNT2', ] /
-        measuresVaryingCor[[iiRank]]['CNT3', ]
-
-    measuresVaryingCor[[iiRank]]['Delta/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['-Delta/NCNT2', ] <-
-        -measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['mADelta/NCNT2', ] <-
-        measuresVaryingCor[[iiRank]]['mA', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['minDelta/NCNT2', ] <-
-        apply(measuresVaryingCor[[iiRank]][c('mADelta/NCNT2', '-Delta/NCNT2'), ],
-              2, min)
-
-
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- rownames(measuresVaryingCor[[iiRank]])
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- ordered(measuresVaryingCor[[iiRank]][, 'Measure'],
-                                                         levels = measureLabels)
-
-
-    measuresVaryingCor[[iiRank]] <- reshape(measuresVaryingCor[[iiRank]], direction = 'long',
-                                            varying = grep('Value', names(measuresVaryingCor[[iiRank]])),
-                                            timevar = 'Expectation')
-
-    measuresVaryingCor[[iiRank]][, 'Expectation'] <- names(listReFerTables)[measuresVaryingCor[[iiRank]][, 'Expectation']]
-
-    measuresVaryingCor[[iiRank]][abs(measuresVaryingCor[[iiRank]][, 'Value']) == 'Inf', 'Value'] <- NaN
-    measuresVaryingCor[[iiRank]][(!is.nan(measuresVaryingCor[[iiRank]][, 'Value'])) &
-                                     (abs(measuresVaryingCor[[iiRank]][, 'Value']) < (10 * .Machine$double.eps)), 'Value'] <- 0
-
-    measuresVaryingCor[[iiRank]][, 'Rank'] <- iiRank + 1
-
-}
-
-measuresVaryingCorLong <- do.call('rbind', measuresVaryingCor)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('CNT./|^Delta|min', measuresVaryingCorLong[, 'Measure']))
-
-varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Common expectation of the product') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent3v7cyclic3Ratios.png', plot = varCorFig,
-       width = 11, height = 6.5)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('Delta$|^.?CNT.$', measuresVaryingCorLong[, 'Measure']))
-
-measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Common expectation of the product') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent3v7cyclic3Measures.png', plot = measCorFig,
-       width = 11, height = 6.5)
-
-
-
-
-
-################################################################################
-# #  Inconsistently connected systems - Margins .53 and .47 a
-################################################################################
-
-nCors <- 35
-
-listReFerTables <- list()
-margin1 <- 0.53
-margin2 <- 0.47
-products <- seq(from = 0.3, to = 0, length.out = nCors)
-
-for (iiProduct in seq_along(products)) {
-    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct],
-                                                         margin1 = margin1,
-                                                         margin2 = margin2)
-    expectation <- (4 * products[iiProduct]) - (2 * (margin1 + margin2)) + 1
-    names(listReFerTables)[iiProduct] <- sprintf('%.3f', expectation)
-
-}
-
-
-measuresVaryingCor <- list()
-
-for (iiRank in seq(maxRank)) {
-    measuresVaryingCor[[iiRank]] <- list()
-    for (jjCor in seq(nCors)) {
-
-        refTable <- listReFerTables[[jjCor]][['refTable']]
-        if (iiRank %% 2) {
-            negTable <- listReFerTables[[jjCor]][['refTable']]
-        } else {
-            negTable <- listReFerTables[[jjCor]][['ferTable']]
-        }
-
-        measuresVaryingCor[[iiRank]][[jjCor]] <- sapply(CbDMeasures(
-            cyclicRVSystem(n = iiRank + 1,
-                           refTable = refTable,
-                           negTable = negTable)),
-            function (y) y[1])
-    }
-
-
-    names(measuresVaryingCor[[iiRank]]) <- paste0('Value.', seq(nCors))
-
-    measuresVaryingCor[[iiRank]] <- as.data.frame(measuresVaryingCor[[iiRank]])
-
-    measuresVaryingCor[[iiRank]]['CNT1/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['CNT1', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['2*CNT2/CNT3', ] <-
-        2 * measuresVaryingCor[[iiRank]]['CNT2', ] /
-        measuresVaryingCor[[iiRank]]['CNT3', ]
-
-    measuresVaryingCor[[iiRank]]['Delta/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['-Delta/NCNT2', ] <-
-        -measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['mADelta/NCNT2', ] <-
-        measuresVaryingCor[[iiRank]]['mA', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['minDelta/NCNT2', ] <-
-        apply(measuresVaryingCor[[iiRank]][c('mADelta/NCNT2', '-Delta/NCNT2'), ],
-              2, min)
-
-
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- rownames(measuresVaryingCor[[iiRank]])
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- ordered(measuresVaryingCor[[iiRank]][, 'Measure'],
-                                                         levels = measureLabels)
-
-
-    measuresVaryingCor[[iiRank]] <- reshape(measuresVaryingCor[[iiRank]], direction = 'long',
-                                            varying = grep('Value', names(measuresVaryingCor[[iiRank]])),
-                                            timevar = 'Expectation')
-
-    measuresVaryingCor[[iiRank]][, 'Expectation'] <- names(listReFerTables)[measuresVaryingCor[[iiRank]][, 'Expectation']]
-
-    measuresVaryingCor[[iiRank]][abs(measuresVaryingCor[[iiRank]][, 'Value']) == 'Inf', 'Value'] <- NaN
-    measuresVaryingCor[[iiRank]][(!is.nan(measuresVaryingCor[[iiRank]][, 'Value'])) &
-                                     (abs(measuresVaryingCor[[iiRank]][, 'Value']) < (10 * .Machine$double.eps)), 'Value'] <- 0
-
-    measuresVaryingCor[[iiRank]][, 'Rank'] <- iiRank + 1
-
-}
-
-measuresVaryingCorLong <- do.call('rbind', measuresVaryingCor)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('CNT./|^Delta|min', measuresVaryingCorLong[, 'Measure']))
-
-varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Common expectation of the product') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent53v47cyclicRatios.png', plot = varCorFig,
-       width = 11, height = 6.5)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('Delta$|^.?CNT.$', measuresVaryingCorLong[, 'Measure']))
-
-measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Common expectation of the product') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent53v47cyclicMeasures.png', plot = measCorFig,
-       width = 11, height = 6.5)
-
-
-
-
-
-################################################################################
-# #  Inconsistently connected systems - Margins .53 and .47 b
-################################################################################
-
-nCors <- 35
-
-listReFerTables <- list()
-margin1 <- 0.47
-margin2 <- 0.47
-products <- seq(from = 0.3, to = 0, length.out = nCors)
-
-for (iiProduct in seq_along(products)) {
-    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct],
-                                                         margin1 = margin1,
-                                                         margin2 = margin2)
-    expectation <- (4 * products[iiProduct]) - (2 * (margin1 + margin2)) + 1
-    names(listReFerTables)[iiProduct] <- sprintf('%.3f', expectation)
-
-}
-
-
-measuresVaryingCor <- list()
-
-for (iiRank in seq(maxRank)) {
-    measuresVaryingCor[[iiRank]] <- list()
-    for (jjCor in seq(nCors)) {
-
-        refTable <- listReFerTables[[jjCor]][['refTable']]
-        if (iiRank %% 2) {
-            negTable <- listReFerTables[[jjCor]][['refTable']]
-        } else {
-            negTable <- listReFerTables[[jjCor]][['ferTable']]
-        }
-
-        measuresVaryingCor[[iiRank]][[jjCor]] <- sapply(CbDMeasures(
-            cyclicRVSystem(n = iiRank + 1,
-                           refTable = refTable,
-                           negTable = negTable)),
-            function (y) y[1])
-    }
-
-    names(measuresVaryingCor[[iiRank]]) <- paste0('Value.', seq(nCors))
-
-    measuresVaryingCor[[iiRank]] <- as.data.frame(measuresVaryingCor[[iiRank]])
-
-    measuresVaryingCor[[iiRank]]['CNT1/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['CNT1', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['2*CNT2/CNT3', ] <-
-        2 * measuresVaryingCor[[iiRank]]['CNT2', ] /
-        measuresVaryingCor[[iiRank]]['CNT3', ]
-
-    measuresVaryingCor[[iiRank]]['Delta/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['-Delta/NCNT2', ] <-
-        -measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['mADelta/NCNT2', ] <-
-        measuresVaryingCor[[iiRank]]['mA', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['minDelta/NCNT2', ] <-
-        apply(measuresVaryingCor[[iiRank]][c('mADelta/NCNT2', '-Delta/NCNT2'), ],
-              2, min)
-
-
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- rownames(measuresVaryingCor[[iiRank]])
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- ordered(measuresVaryingCor[[iiRank]][, 'Measure'],
-                                                         levels = measureLabels)
-
-
-    measuresVaryingCor[[iiRank]] <- reshape(measuresVaryingCor[[iiRank]], direction = 'long',
-                                            varying = grep('Value', names(measuresVaryingCor[[iiRank]])),
-                                            timevar = 'Expectation')
-
-    measuresVaryingCor[[iiRank]][, 'Expectation'] <- names(listReFerTables)[measuresVaryingCor[[iiRank]][, 'Expectation']]
-
-    measuresVaryingCor[[iiRank]][abs(measuresVaryingCor[[iiRank]][, 'Value']) == 'Inf', 'Value'] <- NaN
-    measuresVaryingCor[[iiRank]][(!is.nan(measuresVaryingCor[[iiRank]][, 'Value'])) &
-                                     (abs(measuresVaryingCor[[iiRank]][, 'Value']) < (10 * .Machine$double.eps)), 'Value'] <- 0
-
-    measuresVaryingCor[[iiRank]][, 'Rank'] <- iiRank + 1
-
-}
-
-measuresVaryingCorLong <- do.call('rbind', measuresVaryingCor)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('CNT./|^Delta|min', measuresVaryingCorLong[, 'Measure']))
-
-varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Common expectation of the product') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent53v47cyclic3Ratios.png', plot = varCorFig,
-       width = 11, height = 6.5)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('Delta$|^.?CNT.$', measuresVaryingCorLong[, 'Measure']))
-
-measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Common expectation of the product') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent53v47cyclic3Measures.png', plot = measCorFig,
-       width = 11, height = 6.5)
-
-
-
-
-
-
-################################################################################
-# #  Maximal but one inconsistently connected systems - Margins .3 and .7 a
-################################################################################
-
-nCors <- 35
-
-listReFerTables <- list()
-margin1 <- 0.3
-margin2 <- 0.7
-products <- seq(from = 0.3, to = 0, length.out = nCors)
-
-for (iiProduct in seq_along(products)) {
-    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct],
-                                                         margin1 = margin1,
-                                                         margin2 = margin2)
-    expectation <- (4 * products[iiProduct]) - (2 * (margin1 + margin2)) + 1
-    names(listReFerTables)[iiProduct] <- sprintf('%.3f', expectation)
-
-}
-
-
-measuresVaryingCor <- list()
-
-for (iiRank in seq(maxRank)) {
-    measuresVaryingCor[[iiRank]] <- list()
-    for (jjCor in seq(nCors)) {
-
-        refTable <- listReFerTables[[1]][['refTable']]
-        if (iiRank %% 2) {
-            negTable <- listReFerTables[[jjCor]][['refTable']]
-        } else {
-            negTable <- listReFerTables[[jjCor]][['ferTable']]
-        }
-
-        measuresVaryingCor[[iiRank]][[jjCor]] <- sapply(CbDMeasures(
-            cyclicRVSystem(n = iiRank + 1,
-                           refTable = refTable,
-                           negTable = negTable)),
-            function (y) y[1])
-    }
-
-    names(measuresVaryingCor[[iiRank]]) <- paste0('Value.', seq(nCors))
-
-    measuresVaryingCor[[iiRank]] <- as.data.frame(measuresVaryingCor[[iiRank]])
-
-    measuresVaryingCor[[iiRank]]['CNT1/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['CNT1', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['2*CNT2/CNT3', ] <-
-        2 * measuresVaryingCor[[iiRank]]['CNT2', ] /
-        measuresVaryingCor[[iiRank]]['CNT3', ]
-
-    measuresVaryingCor[[iiRank]]['Delta/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['-Delta/NCNT2', ] <-
-        -measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['mADelta/NCNT2', ] <-
-        measuresVaryingCor[[iiRank]]['mA', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['minDelta/NCNT2', ] <-
-        apply(measuresVaryingCor[[iiRank]][c('mADelta/NCNT2', '-Delta/NCNT2'), ],
-              2, min)
-
-
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- rownames(measuresVaryingCor[[iiRank]])
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- ordered(measuresVaryingCor[[iiRank]][, 'Measure'],
-                                                         levels = measureLabels)
-
-
-    measuresVaryingCor[[iiRank]] <- reshape(measuresVaryingCor[[iiRank]], direction = 'long',
-                                            varying = grep('Value', names(measuresVaryingCor[[iiRank]])),
-                                            timevar = 'Expectation')
-
-    measuresVaryingCor[[iiRank]][, 'Expectation'] <- names(listReFerTables)[measuresVaryingCor[[iiRank]][, 'Expectation']]
-
-    measuresVaryingCor[[iiRank]][abs(measuresVaryingCor[[iiRank]][, 'Value']) == 'Inf', 'Value'] <- NaN
-    measuresVaryingCor[[iiRank]][(!is.nan(measuresVaryingCor[[iiRank]][, 'Value'])) &
-                                     (abs(measuresVaryingCor[[iiRank]][, 'Value']) < (10 * .Machine$double.eps)), 'Value'] <- 0
-
-    measuresVaryingCor[[iiRank]][, 'Rank'] <- iiRank + 1
-
-}
-
-measuresVaryingCorLong <- do.call('rbind', measuresVaryingCor)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('CNT./|^Delta|min', measuresVaryingCorLong[, 'Measure']))
-
-varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Expectation of the product in varying context') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent3v7cyclicVarying1Ratios.png', plot = varCorFig,
-       width = 11, height = 6.5)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('Delta$|^.?CNT.$', measuresVaryingCorLong[, 'Measure']))
-
-measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Expectation of the product in varying context') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent3v7cyclicVarying1Measures.png', plot = measCorFig,
-       width = 11, height = 6.5)
-
-
-
-################################################################################
-# #  Maximal but one Inconsistently connected systems - Margins .3 and .7 b
-################################################################################
-
-nCors <- 35
-
-listReFerTables <- list()
-margin1 <- 0.3
-margin2 <- 0.3
-products <- seq(from = 0.3, to = 0, length.out = nCors)
-
-for (iiProduct in seq_along(products)) {
-    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct],
-                                                         margin1 = margin1,
-                                                         margin2 = margin2)
-    expectation <- (4 * products[iiProduct]) - (2 * (margin1 + margin2)) + 1
-    names(listReFerTables)[iiProduct] <- sprintf('%.3f', expectation)
-
-}
-
-
-measuresVaryingCor <- list()
-
-for (iiRank in seq(maxRank)) {
-    measuresVaryingCor[[iiRank]] <- list()
-    for (jjCor in seq(nCors)) {
-
-        refTable <- listReFerTables[[1]][[1]]
-        if (iiRank %% 2) {
-            negTable <- listReFerTables[[jjCor]][[1]]
-        } else {
-            negTable <- listReFerTables[[jjCor]][['ferTable']]
-        }
-
-        measuresVaryingCor[[iiRank]][[jjCor]] <- sapply(CbDMeasures(
-            cyclicRVSystem(n = iiRank + 1,
-                           refTable = refTable,
-                           negTable = negTable)),
-            function (y) y[1])
-    }
-
-    names(measuresVaryingCor[[iiRank]]) <- paste0('Value.', seq(nCors))
-
-    measuresVaryingCor[[iiRank]] <- as.data.frame(measuresVaryingCor[[iiRank]])
-
-    measuresVaryingCor[[iiRank]]['CNT1/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['CNT1', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['2*CNT2/CNT3', ] <-
-        2 * measuresVaryingCor[[iiRank]]['CNT2', ] /
-        measuresVaryingCor[[iiRank]]['CNT3', ]
-
-    measuresVaryingCor[[iiRank]]['Delta/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['-Delta/NCNT2', ] <-
-        -measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['mADelta/NCNT2', ] <-
-        measuresVaryingCor[[iiRank]]['mA', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['minDelta/NCNT2', ] <-
-        apply(measuresVaryingCor[[iiRank]][c('mADelta/NCNT2', '-Delta/NCNT2'), ],
-              2, min)
-
-
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- rownames(measuresVaryingCor[[iiRank]])
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- ordered(measuresVaryingCor[[iiRank]][, 'Measure'],
-                                                         levels = measureLabels)
-
-
-    measuresVaryingCor[[iiRank]] <- reshape(measuresVaryingCor[[iiRank]], direction = 'long',
-                                            varying = grep('Value', names(measuresVaryingCor[[iiRank]])),
-                                            timevar = 'Expectation')
-
-    measuresVaryingCor[[iiRank]][, 'Expectation'] <- names(listReFerTables)[measuresVaryingCor[[iiRank]][, 'Expectation']]
-
-    measuresVaryingCor[[iiRank]][abs(measuresVaryingCor[[iiRank]][, 'Value']) == 'Inf', 'Value'] <- NaN
-    measuresVaryingCor[[iiRank]][(!is.nan(measuresVaryingCor[[iiRank]][, 'Value'])) &
-                                     (abs(measuresVaryingCor[[iiRank]][, 'Value']) < (10 * .Machine$double.eps)), 'Value'] <- 0
-
-    measuresVaryingCor[[iiRank]][, 'Rank'] <- iiRank + 1
-
-}
-
-measuresVaryingCorLong <- do.call('rbind', measuresVaryingCor)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('CNT./|^Delta|min', measuresVaryingCorLong[, 'Measure']))
-
-varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Expectation of the product in varying context') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent3v7cyclic3Varying1Ratios.png', plot = varCorFig,
-       width = 11, height = 6.5)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('Delta$|^.?CNT.$', measuresVaryingCorLong[, 'Measure']))
-
-measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Expectation of the product in varying context') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent3v7cyclic3Varying1Measures.png', plot = measCorFig,
-       width = 11, height = 6.5)
-
-
-
-
-
-################################################################################
-# #  Maximal but one Inconsistently connected systems - Margins .53 and .47 a
-################################################################################
-
-nCors <- 35
-
-listReFerTables <- list()
-margin1 <- 0.53
-margin2 <- 0.47
-products <- seq(from = 0.3, to = 0, length.out = nCors)
-
-for (iiProduct in seq_along(products)) {
-    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct],
-                                                         margin1 = margin1,
-                                                         margin2 = margin2)
-    expectation <- (4 * products[iiProduct]) - (2 * (margin1 + margin2)) + 1
-    names(listReFerTables)[iiProduct] <- sprintf('%.3f', expectation)
-
-}
-
-
-measuresVaryingCor <- list()
-
-for (iiRank in seq(maxRank)) {
-    measuresVaryingCor[[iiRank]] <- list()
-    for (jjCor in seq(nCors)) {
-
-        refTable <- listReFerTables[[1]][[1]]
-        if (iiRank %% 2) {
-            negTable <- listReFerTables[[jjCor]][[1]]
-        } else {
-            negTable <- listReFerTables[[jjCor]][['ferTable']]
-        }
-
-        measuresVaryingCor[[iiRank]][[jjCor]] <- sapply(CbDMeasures(
-            cyclicRVSystem(n = iiRank + 1,
-                           refTable = refTable,
-                           negTable = negTable)),
-            function (y) y[1])
-    }
-
-    names(measuresVaryingCor[[iiRank]]) <- paste0('Value.', seq(nCors))
-
-    measuresVaryingCor[[iiRank]] <- as.data.frame(measuresVaryingCor[[iiRank]])
-
-    measuresVaryingCor[[iiRank]]['CNT1/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['CNT1', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['2*CNT2/CNT3', ] <-
-        2 * measuresVaryingCor[[iiRank]]['CNT2', ] /
-        measuresVaryingCor[[iiRank]]['CNT3', ]
-
-    measuresVaryingCor[[iiRank]]['Delta/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['-Delta/NCNT2', ] <-
-        -measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['mADelta/NCNT2', ] <-
-        measuresVaryingCor[[iiRank]]['mA', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['minDelta/NCNT2', ] <-
-        apply(measuresVaryingCor[[iiRank]][c('mADelta/NCNT2', '-Delta/NCNT2'), ],
-              2, min)
-
-
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- rownames(measuresVaryingCor[[iiRank]])
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- ordered(measuresVaryingCor[[iiRank]][, 'Measure'],
-                                                         levels = measureLabels)
-
-
-    measuresVaryingCor[[iiRank]] <- reshape(measuresVaryingCor[[iiRank]], direction = 'long',
-                                            varying = grep('Value', names(measuresVaryingCor[[iiRank]])),
-                                            timevar = 'Expectation')
-
-    measuresVaryingCor[[iiRank]][, 'Expectation'] <- names(listReFerTables)[measuresVaryingCor[[iiRank]][, 'Expectation']]
-
-    measuresVaryingCor[[iiRank]][abs(measuresVaryingCor[[iiRank]][, 'Value']) == 'Inf', 'Value'] <- NaN
-    measuresVaryingCor[[iiRank]][(!is.nan(measuresVaryingCor[[iiRank]][, 'Value'])) &
-                                     (abs(measuresVaryingCor[[iiRank]][, 'Value']) < (10 * .Machine$double.eps)), 'Value'] <- 0
-
-    measuresVaryingCor[[iiRank]][, 'Rank'] <- iiRank + 1
-
-}
-
-measuresVaryingCorLong <- do.call('rbind', measuresVaryingCor)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('CNT./|^Delta|min', measuresVaryingCorLong[, 'Measure']))
-
-varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Expectation of the product in varying context') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent53v47cyclicVarying1Ratios.png', plot = varCorFig,
-       width = 11, height = 6.5)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('Delta$|^.?CNT.$', measuresVaryingCorLong[, 'Measure']))
-
-measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Expectation of the product in varying context') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent53v47cyclicVarying1Measures.png', plot = measCorFig,
-       width = 11, height = 6.5)
-
-
-
-
-
-################################################################################
-# #  Maximal but one Inconsistently connected systems - Margins .53 and .47 b
-################################################################################
-
-nCors <- 35
-
-listReFerTables <- list()
-margin1 <- 0.47
-margin2 <- 0.47
-products <- seq(from = 0.3, to = 0, length.out = nCors)
-
-for (iiProduct in seq_along(products)) {
-    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct],
-                                                         margin1 = margin1,
-                                                         margin2 = margin2)
-    expectation <- (4 * products[iiProduct]) - (2 * (margin1 + margin2)) + 1
-    names(listReFerTables)[iiProduct] <- sprintf('%.3f', expectation)
-
-}
-
-
-measuresVaryingCor <- list()
-
-for (iiRank in seq(maxRank)) {
-    measuresVaryingCor[[iiRank]] <- list()
-    for (jjCor in seq(nCors)) {
-
-        refTable <- listReFerTables[[1]][[1]]
-        if (iiRank %% 2) {
-            negTable <- listReFerTables[[jjCor]][[1]]
-        } else {
-            negTable <- listReFerTables[[jjCor]][['ferTable']]
-        }
-
-        measuresVaryingCor[[iiRank]][[jjCor]] <- sapply(CbDMeasures(
-            cyclicRVSystem(n = iiRank + 1,
-                           refTable = refTable,
-                           negTable = negTable)),
-            function (y) y[1])
-    }
-
-    names(measuresVaryingCor[[iiRank]]) <- paste0('Value.', seq(nCors))
-
-    measuresVaryingCor[[iiRank]] <- as.data.frame(measuresVaryingCor[[iiRank]])
-
-    measuresVaryingCor[[iiRank]]['CNT1/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['CNT1', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['2*CNT2/CNT3', ] <-
-        2 * measuresVaryingCor[[iiRank]]['CNT2', ] /
-        measuresVaryingCor[[iiRank]]['CNT3', ]
-
-    measuresVaryingCor[[iiRank]]['Delta/CNT2', ] <-
-        measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['CNT2', ]
-
-    measuresVaryingCor[[iiRank]]['-Delta/NCNT2', ] <-
-        -measuresVaryingCor[[iiRank]]['Delta', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['mADelta/NCNT2', ] <-
-        measuresVaryingCor[[iiRank]]['mA', ] /
-        measuresVaryingCor[[iiRank]]['NCNT2', ]
-
-    measuresVaryingCor[[iiRank]]['minDelta/NCNT2', ] <-
-        apply(measuresVaryingCor[[iiRank]][c('mADelta/NCNT2', '-Delta/NCNT2'), ],
-              2, min)
-
-
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- rownames(measuresVaryingCor[[iiRank]])
-    measuresVaryingCor[[iiRank]][, 'Measure'] <- ordered(measuresVaryingCor[[iiRank]][, 'Measure'],
-                                                         levels = measureLabels)
-
-
-    measuresVaryingCor[[iiRank]] <- reshape(measuresVaryingCor[[iiRank]], direction = 'long',
-                                            varying = grep('Value', names(measuresVaryingCor[[iiRank]])),
-                                            timevar = 'Expectation')
-
-    measuresVaryingCor[[iiRank]][, 'Expectation'] <- names(listReFerTables)[measuresVaryingCor[[iiRank]][, 'Expectation']]
-
-    measuresVaryingCor[[iiRank]][abs(measuresVaryingCor[[iiRank]][, 'Value']) == 'Inf', 'Value'] <- NaN
-    measuresVaryingCor[[iiRank]][(!is.nan(measuresVaryingCor[[iiRank]][, 'Value'])) &
-                                     (abs(measuresVaryingCor[[iiRank]][, 'Value']) < (10 * .Machine$double.eps)), 'Value'] <- 0
-
-    measuresVaryingCor[[iiRank]][, 'Rank'] <- iiRank + 1
-
-}
-
-measuresVaryingCorLong <- do.call('rbind', measuresVaryingCor)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('CNT./|^Delta|min', measuresVaryingCorLong[, 'Measure']))
-
-varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Expectation of the product in varying context') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent53v47cyclic3Varying1Ratios.png', plot = varCorFig,
-       width = 11, height = 6.5)
-
-figureData <- filter(measuresVaryingCorLong,
-                     grepl('Delta$|^.?CNT.$', measuresVaryingCorLong[, 'Measure']))
-
-measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ Rank, scales = 'free_y') +
-    xlab('Expectation of the product in varying context') +
-    scale_colour_brewer(palette="Dark2")
-
-ggsave(filename = '../output/inconsistent53v47cyclic3Varying1Measures.png', plot = measCorFig,
-       width = 11, height = 6.5)
-
-
+ggsave(filename = './output/cyclicSystems_Inconsistent_0.55-0.4_Constant_correlation_Lines_separate_Odd_rank.png',
+       plot = separateOddFig,
+       width = 7.5, height = 4.5)
 
