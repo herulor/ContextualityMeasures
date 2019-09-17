@@ -10,9 +10,10 @@
 
 
 library("ggplot2")
+library("GGally")
 library("dplyr")
 
-source("./ContextualityMeasures.R")
+source("./src/ContextualityMeasures.R")
 
 
 cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2",
@@ -20,123 +21,103 @@ cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2"
 
 
 measureLabels <- c('CNT1', 'CNT2', 'CNT3', 'NCNT2',
-                   'CNT1/CNT2', 'CNT1/CNT3', '2*CNT2/CNT3')
+                   'CNT1/CNT2', '2*CNT1/CNT3', '2*CNT2/CNT3')
 
 
 
-generateRefFerTables <- function(product = 0.5, margin1 = 0.5, margin2 = 0.5) {
-  if (product > margin1 || product > margin2) {
-    stop("product cell needs to have a smaller probability than each margin")
+
+################################################################################
+# # Functions
+################################################################################
+
+
+generateSequencePRBoxlikeMeasures <- function (nCors, PRrank = 3L,
+                                               margin1 = NULL, margin2 = NULL,
+                                               varying = 'all') {
+
+
+  if (is.null(margin1)) {
+    margin1 <- 0.5
   }
-  if (product > 1 || product < 0 || margin1 > 1 || margin1 < 0 || margin2 > 1 ||
-      margin2 < 0) {
-    stop("product and margins need to be probabilities")
+  if (is.null(margin2)) {
+    margin2 <- 0.5
   }
 
-  refTable <- as.table(matrix(c(product, margin1 - product, margin2 - product,
-                                1 - margin1 - margin2 + product), ncol = 2))
-  ferTable <- refTable[2:1, ]
+  listReFerTables <- list()
 
-  output <- list(refTable = refTable, ferTable = ferTable)
+  products <- seq(from = min(margin1, margin2),
+                  to   = max(0, margin1 + margin2 - 1),
+                  length.out = nCors)
 
-  return(output)
+
+  for (iiProduct in seq(nCors)) {
+    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct])
+    expectation <- 2 * sum(diag(listReFerTables[[iiProduct]][['refTable']])) - 1
+    names(listReFerTables)[iiProduct] <- sprintf('%.3f', expectation)
+
+  }
+
+  measuresVaryingCor <- list()
+
+
+  for (jjCor in seq(nCors)) {
+
+    if (varying == 'one') {
+      jjRef <- 1
+      jjFer <- 1
+    } else {
+      jjRef <- jjCor
+      jjFer <- jjCor
+    }
+
+    refTable <- listReFerTables[[jjRef]][['refTable']]
+    negTable <- listReFerTables[[jjFer]][['refTable']][2:1, ]
+    chgTable <- listReFerTables[[jjCor]][['refTable']][2:1, ]
+
+    measuresVaryingCor[[jjCor]] <- sapply(CbDMeasures(
+      generatePRBoxLikeSystem(PRBoxStructure = generatePRBoxNStructure(n = PRrank),
+                              posTable = refTable,
+                              negTable = negTable,
+                              chgTable = chgTable)),
+      function (y) y[1])
+  }
+
+
+  names(measuresVaryingCor) <- paste0('Value.', seq(nCors))
+
+  measuresVaryingCor <- as.data.frame(measuresVaryingCor)
+
+  measuresVaryingCor['CNT1/CNT2', ] <-
+    measuresVaryingCor['CNT1', ] /
+    measuresVaryingCor['CNT2', ]
+
+  measuresVaryingCor['2*CNT1/CNT3', ] <-
+    2 * measuresVaryingCor['CNT1', ] /
+    measuresVaryingCor['CNT3', ]
+
+  measuresVaryingCor['2*CNT2/CNT3', ] <-
+    2 * measuresVaryingCor['CNT2', ] /
+    measuresVaryingCor['CNT3', ]
+
+  measuresVaryingCor[, 'Measure'] <- rownames(measuresVaryingCor)
+  measuresVaryingCor[, 'Measure'] <- ordered(measuresVaryingCor[, 'Measure'],
+                                             levels = measureLabels)
+
+
+  measuresVaryingCorLong <- reshape(measuresVaryingCor, direction = 'long',
+                                    varying = grep('Value', names(measuresVaryingCor)),
+                                    timevar = 'Expectation')
+
+  measuresVaryingCorLong[, 'Expectation'] <- names(listReFerTables)[measuresVaryingCorLong[, 'Expectation']]
+
+  measuresVaryingCorLong[abs(measuresVaryingCorLong[, 'Value']) == 'Inf', 'Value'] <- NaN
+  measuresVaryingCorLong[(!is.nan(measuresVaryingCorLong[, 'Value'])) &
+                           (abs(measuresVaryingCorLong[, 'Value']) < (10 * .Machine$double.eps)), 'Value'] <- 0
+
+
+  return(measuresVaryingCorLong)
 }
 
-
-
-isPRStructure <- function (x) {
-  test <- TRUE
-  if (!is.table(x) & !is.matrix(x)) {
-    message('x should be a table or a matrix')
-    test <- FALSE
-  }
-
-  if (!all(x %in% c(0, 1))) {
-    message('x should contain only 0s or 1s')
-    test <- FALSE
-  }
-
-  if (!is.null(rownames(x))) {
-    namesDim <- unique(c(rownames(x), colnames(x)))
-    if (length(namesDim) != (nrow(x) + ncol(x))) {
-      message('Each row and column of x should have a unique name')
-      test <- FALSE
-    }
-  }
-
-  return(test)
-}
-
-
-
-generatePRBoxNStructure <- function (n) {
-
-  if (!is.integer(n) || (n < 2)) {
-    stop('n should be at least 2')
-  }
-
-
-  x <- matrix(data = 1, nrow = n, ncol = n)
-  y <- matrix(data = seq(n^2), nrow = n, ncol = n)
-
-  x[diag(y[-1, , drop = FALSE])] <- 0
-
-  rownames(x) <- paste0('A', seq(nrow(x)))
-  colnames(x) <- paste0('B', seq(nrow(x)))
-
-  return(x)
-}
-
-
-
-generatePRBoxLikeSystem <- function(PRBoxStructure, posTable = NULL, negTable = NULL, chgTable = NULL) {
-
-  if(suppressMessages(isPRStructure(PRBoxStructure))) {
-
-    if (is.null(posTable)) {
-      posTable <- as.table(diag(2)) / 2
-    }
-
-    if (is.null(negTable)) {
-      negTable <- posTable[2:1, ]
-    }
-
-    if (is.null(chgTable)) {
-      chgTable <- negTable
-    }
-
-    listJoints <- list()
-    rows <- row(PRBoxStructure)
-    cols <- col(PRBoxStructure)
-
-
-    jjOddCtx <- 1
-    for (iiContext in seq_along(PRBoxStructure)) {
-      if (PRBoxStructure[iiContext] == 1) {
-        listJoints[[iiContext]] <- posTable
-      } else {
-        if (jjOddCtx == 1) {
-          listJoints[[iiContext]] <- chgTable
-          jjOddCtx <- 0
-        } else {
-          listJoints[[iiContext]] <- negTable
-        }
-      }
-
-      names(dimnames(listJoints[[iiContext]])) <-
-        c(rownames(PRBoxStructure)[rows[iiContext]],
-          colnames(PRBoxStructure)[cols[iiContext]])
-
-      dimnames(listJoints[[iiContext]])[[1]] <-
-        dimnames(listJoints[[iiContext]])[[2]] <-
-        c('-1', '1')
-    }
-
-    out <- do.call(RVSystem, listJoints)
-
-    return(out)
-  }
-}
 
 
 
@@ -144,89 +125,65 @@ generatePRBoxLikeSystem <- function(PRBoxStructure, posTable = NULL, negTable = 
 # #  Constant |cor| varying cor from 1 in refTable (-1 in ferTable) to -1 (1)
 ################################################################################
 
-nCors <- 41
+nCors <- 31
 
-listReFerTables <- list()
-products <- seq(from = 0.5, to = 0, length.out = nCors)
+measuresVaryingCorLong <- generateSequencePRBoxlikeMeasures(nCors = nCors,
+                                                            PRrank = 3L,
+                                                            margin1 = 0.5,
+                                                            margin2 = 0.5,
+                                                            varying = 'all')
 
-for (iiProduct in seq_along(products)) {
-    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct])
-    names(listReFerTables)[iiProduct] <- sprintf('%.3f', ((4 * products[iiProduct]) - 1))
+## Save results
 
-}
+#write.table(measuresVaryingCorLong, file = './output/PRlikeSystem_Consistent_Constant_correlation.txt',
+#            sep = '\t', col.names = TRUE, row.names = FALSE)
 
-
-measuresVaryingCor <- list()
-
-
-    for (jjCor in seq(nCors)) {
-
-      print(jjCor)
-
-        refTable <- listReFerTables[[jjCor]][['refTable']]
-        negTable <- listReFerTables[[jjCor]][['ferTable']]
-
-        measuresVaryingCor[[jjCor]] <- sapply(CbDMeasures(
-            generatePRBoxLikeSystem(PRBoxStructure = generatePRBoxNStructure(n = 3L),
-                           posTable = refTable,
-                           negTable = negTable,
-                           chgTable = NULL)),
-            function (y) y[1])
-    }
-
-    names(measuresVaryingCor) <- paste0('Value.', seq(nCors))
-
-    measuresVaryingCor <- as.data.frame(measuresVaryingCor)
-
-    measuresVaryingCor['CNT1/CNT2', ] <-
-        measuresVaryingCor['CNT1', ] /
-        measuresVaryingCor['CNT2', ]
-
-    measuresVaryingCor['CNT1/CNT3', ] <-
-        measuresVaryingCor['CNT1', ] /
-        measuresVaryingCor['CNT3', ]
-
-    measuresVaryingCor['2*CNT2/CNT3', ] <-
-        2 * measuresVaryingCor['CNT2', ] /
-        measuresVaryingCor['CNT3', ]
-
-    measuresVaryingCor[, 'Measure'] <- rownames(measuresVaryingCor)
-    measuresVaryingCor[, 'Measure'] <- ordered(measuresVaryingCor[, 'Measure'],
-                                                         levels = measureLabels)
-
-    measuresVaryingCor <- reshape(measuresVaryingCor, direction = 'long',
-                                            varying = grep('Value', names(measuresVaryingCor)),
-                                            timevar = 'Expectation')
-
-    measuresVaryingCor[, 'Expectation'] <- names(listReFerTables)[measuresVaryingCor[, 'Expectation']]
-
-    measuresVaryingCor[abs(measuresVaryingCor[, 'Value']) == 'Inf', 'Value'] <- NaN
-    measuresVaryingCor[(!is.nan(measuresVaryingCor[, 'Value'])) &
-                                     (abs(measuresVaryingCor[, 'Value']) < (10 * .Machine$double.eps)), 'Value'] <- 0
+measuresVaryingCorLong <- read.table('./output/PRlikeSystem_Consistent_Constant_correlation.txt',
+                                      header = TRUE, sep = '\t')
 
 
-figureData <- filter(measuresVaryingCor,
-                     grepl('CNT./', measuresVaryingCor[, 'Measure']))
+# # Transform to wide table for scatterplots
+
+dplyr::inner_join(dplyr::inner_join(
+  dplyr::filter(measuresVaryingCorLong, Measure == 'CNT1') %>%
+    mutate(CNT1 = Value) %>% select('Expectation', 'CNT1'),
+
+  dplyr::filter(measuresVaryingCorLong, Measure == 'CNT2') %>%
+    mutate(CNT2 = Value) %>% select('Expectation', 'CNT2')),
+
+  dplyr::filter(measuresVaryingCorLong, Measure == 'CNT3') %>%
+    mutate(CNT3 = Value) %>% select('Expectation', 'CNT3')) %>%
+
+  mutate(Type = 'Consistent', Varying = 'All') ->
+
+  measuresWideCA
+
+
+
+## Figures
+
+figureData <- filter(measuresVaryingCorLong,
+                     grepl('CNT./', measuresVaryingCorLong[, 'Measure']))
 
 varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ ., scales = 'free_y') +
-    xlab('Common expectation of the product') +
-    scale_colour_brewer(palette="Dark2")
+  geom_point(aes(colour = Measure), size = 0.7) +
+  facet_grid(Measure ~ ., scales = 'free_y') +
+  xlab('Common expectation of the product') +
+  scale_colour_brewer(palette="Dark2")
 
-ggsave(filename = '../output/PR3constantAbsCorRatios.png', plot = varCorFig,
+ggsave(filename = './output/PRlikeSystem_Consistent_Constant_correlation_Ratios.png', plot = varCorFig,
        width = 7, height = 5)
 
-figureData <- filter(measuresVaryingCor,
-                     grepl('^N?CNT.$', measuresVaryingCor[, 'Measure']))
+figureData <- filter(measuresVaryingCorLong,
+                     grepl('^N?CNT.$', measuresVaryingCorLong[, 'Measure']))
 
 measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ ., scales = 'free_y') +
-    xlab('Common expectation of the product') +
-    scale_colour_brewer(palette="Dark2")
+  geom_point(aes(colour = Measure), size = 0.7) +
+  facet_grid(Measure ~ ., scales = 'free_y') +
+  xlab('Common expectation of the product') +
+  scale_colour_brewer(palette="Dark2")
 
-ggsave(filename = '../output/PR3constantAbsCorMeasures.png', plot = measCorFig,
+ggsave(filename = './output/PRlikeSystem_Consistent_Constant_correlation_Measures.png', plot = measCorFig,
        width = 7, height = 5)
 
 
@@ -237,95 +194,280 @@ ggsave(filename = '../output/PR3constantAbsCorMeasures.png', plot = measCorFig,
 # #  Maximal but 1 varying 1 cor from 1 in refTable (-1 in ferTable) to -1 (1)
 ################################################################################
 
-nCors <- 41
 
-listReFerTables <- list()
-products <- seq(from = 0.5, to = 0, length.out = nCors)
+measuresVaryingCorLong <- generateSequencePRBoxlikeMeasures(nCors = nCors,
+                                                            PRrank = 3L,
+                                                            margin1 = 0.5,
+                                                            margin2 = 0.5,
+                                                            varying = 'one')
 
-for (iiProduct in seq_along(products)) {
-    listReFerTables[[iiProduct]] <- generateRefFerTables(product = products[iiProduct])
-    names(listReFerTables)[iiProduct] <- sprintf('%.3f', ((4 * products[iiProduct]) - 1))
+## Save results
 
-}
+write.table(measuresVaryingCorLong, file = './output/PRlikeSystem_Consistent_Varying_one_context.txt',
+            sep = '\t', col.names = TRUE, row.names = FALSE)
 
+#measuresVaryingCorLong <- read.table(file = './output/PRlikeSystem_Consistent_Varying_one_context.txt',
+#           header = TRUE, sep = '\t')
 
-measuresVaryingCor <- list()
+# # Transform to wide table for scatterplots
 
+dplyr::inner_join(dplyr::inner_join(
+  dplyr::filter(measuresVaryingCorLong, Measure == 'CNT1') %>%
+    mutate(CNT1 = Value) %>% select('Expectation', 'CNT1'),
 
-    for (jjCor in seq(nCors)) {
+  dplyr::filter(measuresVaryingCorLong, Measure == 'CNT2') %>%
+    mutate(CNT2 = Value) %>% select('Expectation', 'CNT2')),
 
-      print(jjCor)
+  dplyr::filter(measuresVaryingCorLong, Measure == 'CNT3') %>%
+    mutate(CNT3 = Value) %>% select('Expectation', 'CNT3')) %>%
 
-        refTable <- listReFerTables[[1]][['refTable']]
-        negTable <- listReFerTables[[1]][['ferTable']]
-        chgTable <- listReFerTables[[jjCor]][['ferTable']]
+  mutate(Type = 'Consistent', Varying = 'One') ->
 
-        measuresVaryingCor[[jjCor]] <- sapply(CbDMeasures(
-            generatePRBoxLikeSystem(PRBoxStructure = generatePRBoxNStructure(n = 3L),
-                           posTable = refTable,
-                           negTable = negTable,
-                           chgTable = chgTable)),
-            function (y) y[1])
-    }
-
-    names(measuresVaryingCor) <- paste0('Value.', seq(nCors))
-
-    measuresVaryingCor <- as.data.frame(measuresVaryingCor)
-
-    measuresVaryingCor['CNT1/CNT2', ] <-
-        measuresVaryingCor['CNT1', ] /
-        measuresVaryingCor['CNT2', ]
-
-    measuresVaryingCor['CNT1/CNT3', ] <-
-        measuresVaryingCor['CNT1', ] /
-        measuresVaryingCor['CNT3', ]
-
-    measuresVaryingCor['2*CNT2/CNT3', ] <-
-        2 * measuresVaryingCor['CNT2', ] /
-        measuresVaryingCor['CNT3', ]
-
-    measuresVaryingCor[, 'Measure'] <- rownames(measuresVaryingCor)
-    measuresVaryingCor[, 'Measure'] <- ordered(measuresVaryingCor[, 'Measure'],
-                                                         levels = measureLabels)
+  measuresWideCO
 
 
-    ### SCATTERPLOT
 
+## Figures
 
-    measuresVaryingCor <- reshape(measuresVaryingCor, direction = 'long',
-                                            varying = grep('Value', names(measuresVaryingCor)),
-                                            timevar = 'Expectation')
-
-    measuresVaryingCor[, 'Expectation'] <- names(listReFerTables)[measuresVaryingCor[, 'Expectation']]
-
-    measuresVaryingCor[abs(measuresVaryingCor[, 'Value']) == 'Inf', 'Value'] <- NaN
-    measuresVaryingCor[(!is.nan(measuresVaryingCor[, 'Value'])) &
-                                     (abs(measuresVaryingCor[, 'Value']) < (10 * .Machine$double.eps)), 'Value'] <- 0
-
-
-figureData <- filter(measuresVaryingCor,
-                     grepl('CNT./', measuresVaryingCor[, 'Measure']))
+figureData <- filter(measuresVaryingCorLong,
+                     grepl('CNT./', measuresVaryingCorLong[, 'Measure']))
 
 varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = round(Value, 10))) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ ., scales = 'free_y') +
-    xlab('Expectation of the product in varying context') +
-    ylab('Value') +
-    scale_colour_brewer(palette="Dark2")
+  geom_point(aes(colour = Measure), size = 0.7) +
+  facet_grid(Measure ~ ., scales = 'free_y') +
+  xlab('Expectation of the product in varying context') +
+  ylab('Value') +
+  scale_colour_brewer(palette="Dark2")
 
-ggsave(filename = '../output/PR3Varying1Ratios.png', plot = varCorFig,
+ggsave(filename = './output/PRlikeSystem_Consistent_Varying_one_context_Ratios.png', plot = varCorFig,
        width = 7, height = 5)
 
-figureData <- filter(measuresVaryingCor,
-                     grepl('^N?CNT.$', measuresVaryingCor[, 'Measure']))
+figureData <- filter(measuresVaryingCorLong,
+                     grepl('^N?CNT.$', measuresVaryingCorLong[, 'Measure']))
 
 measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = round(Value, 10))) +
-    geom_point(aes(colour = Measure), size = 0.7) +
-    facet_grid(Measure ~ ., scales = 'free_y') +
-    xlab('Expectation of the product in varying context') +
-    ylab('Value') +
-    scale_colour_brewer(palette="Dark2")
+  geom_point(aes(colour = Measure), size = 0.7) +
+  facet_grid(Measure ~ ., scales = 'free_y') +
+  xlab('Expectation of the product in varying context') +
+  ylab('Value') +
+  scale_colour_brewer(palette="Dark2")
 
-ggsave(filename = '../output/PR3Varying1Measures.png', plot = measCorFig,
+ggsave(filename = './output/PRlikeSystem_Consistent_Varying_one_context_Measures.png', plot = measCorFig,
        width = 7, height = 5)
+
+
+################################################################################
+# # Inconsistent 0.55 - 0.40. - Constant correlation
+################################################################################
+
+measuresVaryingCorLong <- generateSequencePRBoxlikeMeasures(nCors = nCors,
+                                                            PRrank = 3L,
+                                                            margin1 = 0.55,
+                                                            margin2 = 0.40,
+                                                            varying = 'all')
+
+
+## Save results
+
+write.table(measuresVaryingCorLong, file = './output/PRlikeSystem_Inconsistent_0.55-0.40_Constant_correlation.txt',
+            sep = '\t', col.names = TRUE, row.names = FALSE)
+
+
+#measuresVaryingCorLong <- read.table('./output/PRlikeSystem_Inconsistent_0.55-0.40_Constant_correlation.txt',
+#                                     header = TRUE, sep = '\t')
+
+# # Transform to wide table for scatterplots
+
+dplyr::inner_join(dplyr::inner_join(
+  dplyr::filter(measuresVaryingCorLong, Measure == 'CNT1') %>%
+    mutate(CNT1 = Value) %>% select('Expectation', 'CNT1'),
+
+  dplyr::filter(measuresVaryingCorLong, Measure == 'CNT2') %>%
+    mutate(CNT2 = Value) %>% select('Expectation', 'CNT2')),
+
+  dplyr::filter(measuresVaryingCorLong, Measure == 'CNT3') %>%
+    mutate(CNT3 = Value) %>% select('Expectation', 'CNT3')) %>%
+
+  mutate(Type = 'Inconsistent', Varying = 'All') ->
+
+  measuresWideIA
+
+
+## Figures
+
+figureData <- filter(measuresVaryingCorLong,
+                     grepl('CNT./', measuresVaryingCorLong[, 'Measure']))
+
+varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
+  geom_point(aes(colour = Measure), size = 0.7) +
+  facet_grid(Measure ~ ., scales = 'free_y') +
+  xlab('Common expectation of the product') +
+  scale_colour_brewer(palette="Dark2")
+
+ggsave(filename = './output/PRlikeSystem_Inconsistent_0.55-0.40_Constant_correlation_Ratios.png', plot = varCorFig,
+       width = 7, height = 5)
+
+figureData <- filter(measuresVaryingCorLong,
+                     grepl('^N?CNT.$', measuresVaryingCorLong[, 'Measure']))
+
+measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = Value)) +
+  geom_point(aes(colour = Measure), size = 0.7) +
+  facet_grid(Measure ~ ., scales = 'free_y') +
+  xlab('Common expectation of the product') +
+  scale_colour_brewer(palette="Dark2")
+
+ggsave(filename = './output/PRlikeSystem_Inconsistent_0.55-0.40_Constant_correlation_Measures.png', plot = measCorFig,
+       width = 7, height = 5)
+
+
+
+
+
+################################################################################
+# # Inconsistent 0.55 - 0.40. Varying one context
+################################################################################
+
+
+measuresVaryingCorLong <- generateSequencePRBoxlikeMeasures(nCors = nCors,
+                                                            PRrank = 3L,
+                                                            margin1 = 0.55,
+                                                            margin2 = 0.40,
+                                                            varying = 'one')
+
+## Save results
+
+write.table(measuresVaryingCorLong, file = './output/PRlikeSystem_Inconsistent_0.55-0.40_Varying_one_context.txt',
+            sep = '\t', col.names = TRUE, row.names = FALSE)
+
+#measuresVaryingCorLong <- read.table('./output/PRlikeSystem_Inconsistent_0.55-0.40_Varying_one_context.txt',
+#                                     header = TRUE, sep = '\t')
+
+# # Transform to wide table for scatterplots
+
+dplyr::inner_join(dplyr::inner_join(
+  dplyr::filter(measuresVaryingCorLong, Measure == 'CNT1') %>%
+    mutate(CNT1 = Value) %>% select('Expectation', 'CNT1'),
+
+  dplyr::filter(measuresVaryingCorLong, Measure == 'CNT2') %>%
+    mutate(CNT2 = Value) %>% select('Expectation', 'CNT2')),
+
+  dplyr::filter(measuresVaryingCorLong, Measure == 'CNT3') %>%
+    mutate(CNT3 = Value) %>% select('Expectation', 'CNT3')) %>%
+
+  mutate(Type = 'Inconsistent', Varying = 'One') ->
+
+  measuresWideIO
+
+
+## Figures
+
+figureData <- filter(measuresVaryingCorLong,
+                     grepl('CNT./', measuresVaryingCorLong[, 'Measure']))
+
+varCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = round(Value, 10))) +
+  geom_point(aes(colour = Measure), size = 0.7) +
+  facet_grid(Measure ~ ., scales = 'free_y') +
+  xlab('Expectation of the product in varying context') +
+  ylab('Value') +
+  scale_colour_brewer(palette="Dark2")
+
+ggsave(filename = './output/PRlikeSystem_Inconsistent_0.55-0.40_Varying_one_context_Ratios.png', plot = varCorFig,
+       width = 7, height = 5)
+
+figureData <- filter(measuresVaryingCorLong,
+                     grepl('^N?CNT.$', measuresVaryingCorLong[, 'Measure']))
+
+measCorFig <- ggplot(figureData, aes(x = as.numeric(Expectation), y = round(Value, 10))) +
+  geom_point(aes(colour = Measure), size = 0.7) +
+  facet_grid(Measure ~ ., scales = 'free_y') +
+  xlab('Expectation of the product in varying context') +
+  ylab('Value') +
+  scale_colour_brewer(palette="Dark2")
+
+ggsave(filename = './output/PRlikeSystem_Inconsistent_0.55-0.40_Varying_one_context_Measures.png', plot = measCorFig,
+       width = 7, height = 5)
+
+
+
+
+# # Scatterplot and alike
+
+
+measuresWide <- filter(dplyr::bind_rows(measuresWideCA, measuresWideCO,
+                                        measuresWideIA, measuresWideIO),
+                       CNT1 > 0)
+
+
+
+measuresWide <- mutate(measuresWide,
+                       `CNT1/CNT2` = round(CNT1 / CNT2, 5),
+                       `CNT1/CNT3` = round(CNT1 / CNT3, 5),
+                       `CNT2/CNT1` = round(CNT2 / CNT1, 5),
+                       `CNT2/CNT3` = round(CNT2 / CNT3, 5),
+                       `CNT3/CNT1` = round(CNT3 / CNT2, 5),
+                       sign = ifelse(Varying == 'All', as.numeric(Expectation) > 0, FALSE),
+                       group = paste(sign, Type, Varying),
+                       Cases = paste(Type, Varying))
+
+
+scatterCnt <- ggpairs(measuresWide, mapping = aes(colour = group),
+                      columns = c('CNT1', 'CNT2', 'CNT3'),
+                      diag = NULL,
+                      upper = list(continuous = 'points'))
+
+
+constantCNT1 <- data.frame(CNT1.start = measuresWide[c(14, 15), 'CNT1'],
+                           CNT1.end   = measuresWide[c(44, 38), 'CNT1'],
+                           CNT2.start = measuresWide[c(14, 15), 'CNT2'],
+                           CNT2.end   = measuresWide[c(44, 38), 'CNT2'])
+
+constantCNT2 <- data.frame(CNT1.start = measuresWide[c(6, 16), 'CNT1'],
+                           CNT1.end   = measuresWide[c(11, 17), 'CNT1'],
+                           CNT2.start = measuresWide[c(6, 16), 'CNT2'],
+                           CNT2.end   = measuresWide[c(11, 17), 'CNT2'])
+
+
+measuresWidePlot <- filter(measuresWide, Type == 'Consistent')
+measuresWidePlot <- mutate(measuresWidePlot,
+                           Case = recode(Cases,
+                                          'Consistent All' = 'b',
+                                          'Consistent One' = 'a'))
+
+linesCnt <- ggplot(measuresWidePlot, aes(y = CNT1, x = CNT2))  +
+  geom_point(aes(shape = Case), size = 2, alpha = 0.7) +
+  labs(shape = '') +
+  scale_shape_manual(values = c(19, 5))
+slopes <- unique(measuresWide[, 'CNT1/CNT2'])
+
+linesCnt <- linesCnt +
+  geom_segment(aes(x = 0, y = 0,
+                   xend = max(CNT2),
+                   yend = max(CNT2) * slopes[1]),
+               linetype = 1,
+               alpha = 0.2) +
+  geom_segment(aes(x = 0, y = 0,
+                   xend = max(CNT2),
+                   yend = max(CNT2) * slopes[2]),
+               linetype = 2,
+               alpha = 0.2)
+
+linesCnt <- linesCnt +
+  geom_segment(data = constantCNT1,
+               aes(x = CNT2.start, y = CNT1.start,
+                   xend = CNT2.end, yend = CNT1.end),
+               linetype = 3,
+               alpha = 0.6) +
+  geom_segment(data = constantCNT2,
+               aes(x = CNT2.start, y = CNT1.start,
+                   xend = CNT2.end, yend = CNT1.end),
+               linetype = 4,
+               alpha = 0.6)
+
+
+ggsave(filename = './output/PRlikeSystem_CNT_Scatterplots.png', plot = scatterCnt,
+       width = 7, height = 5)
+
+
+ggsave(filename = './output/PRlikeSystem_CNT_Lineplots.png', plot = linesCnt,
+       width = 6, height = 4.5)
 

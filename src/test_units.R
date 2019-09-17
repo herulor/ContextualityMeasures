@@ -7,6 +7,8 @@
 # # 2019
 ################################################################################
 
+source('./ContextualityMeasures.R')
+
 # Structure data for tests
 
 data("Titanic")
@@ -73,3 +75,9 @@ aliceCnt <- cntMatrices(AliceBob)
 
 test_that('AliceBob cntMatrices generated object is of class cntMatrices',
           expect_true(isCntMatrices(aliceCnt)))
+
+
+
+
+# #
+
