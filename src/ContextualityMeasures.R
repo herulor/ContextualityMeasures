@@ -140,8 +140,14 @@ isDRVSystem <- function (x) {
 #' @param ... one or more prop.tables to construct the system
 #' @return An RVSystem if the set passes the test. NULL otherwise.
 #' @examples
-RVSystem <- function (...) {
-    out <- list(...)
+RVSystem <- function (x, ...) {
+
+    if (!is.list(x)) {
+        out <- list(x, ...)
+    } else {
+        out <- x
+    }
+
     class(out) <- 'RVSystem'
     if (isRVSystem(out)) {
         if (is.null(names(out)) || any(names(out) == "")) {
@@ -168,7 +174,7 @@ RVSystem <- function (...) {
 #' @param x an RVSystem
 #' @return A cntMatrices object
 #' @examples
-cntMatrices <- function (x) {
+cntMatrices <- function (x, withMatrices = TRUE) {
 
     require('slam')
     require('abind')
@@ -205,10 +211,14 @@ cntMatrices <- function (x) {
 
         # Low-order marginals
 
-        cntMatrixL <- slam::simple_triplet_zero_matrix(nrow = nVariables, ncol = nColumns,
-                                                       mode = 'integer')
+        if (withMatrices) {
+            cntMatrixL <- slam::simple_triplet_zero_matrix(nrow = nVariables, ncol = nColumns,
+                                                           mode = 'integer')
 
-        cntMatrixL           <- rbind(t(rep(1, nColumns)), cntMatrixL)
+            cntMatrixL           <- rbind(t(rep(1, nColumns)), cntMatrixL)
+        } else {
+            cntMatrixL <- matrix(0, nrow = nVariables + 1)
+        }
         rownames(cntMatrixL) <- rep('', nVariables + 1)
 
         lowMargins        <- c(1, numeric(nVariables))
@@ -222,7 +232,9 @@ cntMatrices <- function (x) {
 
                 kkVariableName <- names(dimnames(x[[jjContext]]))[kkVariable]
 
-                cntMatrixL[iiRow, ]         <- rep(c(1, 0), each = 2 ** (nVariables - iiRow + 1))
+                if (withMatrices) {
+                    cntMatrixL[iiRow, ]         <- rep(c(1, 0), each = 2 ** (nVariables - iiRow + 1))
+                }
                 rownames(cntMatrixL)[iiRow] <- paste0(jjContext, '.', kkVariableName)
 
                 lowMargins[iiRow]        <- apply(X = x[[jjContext]],
@@ -242,9 +254,13 @@ cntMatrices <- function (x) {
         nBunchesVariables   <- sapply(x, function (y) length(dim(y)))
         nBunchProbabilities <- sum((2 ^ nBunchesVariables) - nBunchesVariables - 1)
 
-        cntMatrixB <- slam::simple_triplet_zero_matrix(nrow = nBunchProbabilities,
-                                                       ncol = nColumns,
-                                                       mode = 'integer')
+        if (withMatrices) {
+            cntMatrixB <- slam::simple_triplet_zero_matrix(nrow = nBunchProbabilities,
+                                                           ncol = nColumns,
+                                                           mode = 'integer')
+        } else {
+            cntMatrixB <- matrix(0, nrow = nBunchProbabilities)
+        }
 
         rownames(cntMatrixB)      <- rep('', nBunchProbabilities)
 
@@ -254,30 +270,33 @@ cntMatrices <- function (x) {
         iiRow <- 1
         for (jjContext in names(x)) {
 
-            for (kkMargins in 2:nBunchesVariables[jjContext]) {
+            if (nBunchesVariables[jjContext] > 1) {
+                for (kkMargins in 2:nBunchesVariables[jjContext]) {
 
-                mmMarginNames <- combn(x = seq_along(bunchesVariables[[jjContext]]),
-                                       m = kkMargins)
+                    mmMarginNames <- combn(x = seq_along(bunchesVariables[[jjContext]]),
+                                           m = kkMargins)
 
-                for (kkkMargin in seq(ncol(mmMarginNames))) {
+                    for (kkkMargin in seq(ncol(mmMarginNames))) {
 
-                    indexVariables  <- mmMarginNames[, kkkMargin]
-                    namesVariables  <- bunchesVariables[[jjContext]][indexVariables]
-                    valuesVariables <- refValues[namesVariables]
+                        indexVariables  <- mmMarginNames[, kkkMargin]
+                        namesVariables  <- bunchesVariables[[jjContext]][indexVariables]
+                        valuesVariables <- refValues[namesVariables]
 
-                    marginsTable <- apply(x[[jjContext]], indexVariables, sum)
+                        marginsTable <- apply(x[[jjContext]], indexVariables, sum)
 
-                    bunchProbabilities[iiRow] <- abind::asub(marginsTable,
-                                                             as.list(valuesVariables),
-                                                             indexVariables)
+                        bunchProbabilities[iiRow] <- abind::asub(marginsTable,
+                                                                 as.list(valuesVariables))
 
-                    cntMatrixB[iiRow, ] <- apply(cntMatrixL[paste0(jjContext, '.', namesVariables), ], 2, prod)
+                        if (withMatrices) {
+                            cntMatrixB[iiRow, ] <- apply(cntMatrixL[paste0(jjContext, '.', namesVariables), ], 2, prod)
+                        }
 
-                    rownames(cntMatrixB)[iiRow]          <-
-                        names(bunchProbabilities)[iiRow] <-
-                        paste(c(jjContext, namesVariables), collapse = '.')
+                        rownames(cntMatrixB)[iiRow]          <-
+                            names(bunchProbabilities)[iiRow] <-
+                            paste(c(jjContext, namesVariables), collapse = '.')
 
-                    iiRow <- iiRow + 1
+                        iiRow <- iiRow + 1
+                    }
                 }
             }
 
@@ -299,9 +318,13 @@ cntMatrices <- function (x) {
         nConnectionVariables     <- sapply(connectionBunches, length)
         nConnectionProbabilities <- sum(choose(nConnectionVariables, 2))
 
-        cntMatrixC <- slam::simple_triplet_zero_matrix(nrow = nConnectionProbabilities,
-                                                       ncol = nColumns,
-                                                       mode = 'integer')
+        if (withMatrices) {
+            cntMatrixC <- slam::simple_triplet_zero_matrix(nrow = nConnectionProbabilities,
+                                                           ncol = nColumns,
+                                                           mode = 'integer')
+        } else {
+            cntMatrixC <- matrix(0, nrow = nConnectionProbabilities)
+        }
 
         rownames(cntMatrixC)           <- rep('', nConnectionProbabilities)
 
@@ -311,26 +334,30 @@ cntMatrices <- function (x) {
         iiRow <- 1
         for (jjProperty in namesProperties) {
 
-            mmContextPairs <- combn(x = seq_along(connectionBunches[[jjProperty]]),
-                                    m = 2)
+            if (nConnectionVariables[jjProperty] > 1) {
+                mmContextPairs <- combn(x = seq_along(connectionBunches[[jjProperty]]),
+                                        m = 2)
 
-            for (kkkPair in seq(ncol(mmContextPairs))) {
+                for (kkkPair in seq(ncol(mmContextPairs))) {
 
-                indexContexts   <- mmContextPairs[, kkkPair]
-                namesContexts   <- connectionBunches[[jjProperty]][indexContexts]
-                valuesVariables <- rep(refValues[jjProperty], length(indexContexts))
+                    indexContexts   <- mmContextPairs[, kkkPair]
+                    namesContexts   <- connectionBunches[[jjProperty]][indexContexts]
+                    valuesVariables <- rep(refValues[jjProperty], length(indexContexts))
 
-                connectionProbabilities[iiRow] <- min(lowMargins[paste0(connectionBunches[[jjProperty]],
-                                                                        '.', jjProperty)])
+                    connectionProbabilities[iiRow] <- min(lowMargins[paste0(connectionBunches[[jjProperty]][mmContextPairs[, kkkPair]],
+                                                                            '.', jjProperty)])
 
-                cntMatrixC[iiRow, ] <- apply(cntMatrixL[paste0(connectionBunches[[jjProperty]],
-                                                               '.', jjProperty), ], 2, prod)
+                    if (withMatrices) {
+                        cntMatrixC[iiRow, ] <- apply(cntMatrixL[paste0(connectionBunches[[jjProperty]][mmContextPairs[, kkkPair]],
+                                                                       '.', jjProperty), ], 2, prod)
+                    }
 
-                rownames(cntMatrixC)[iiRow]               <-
-                    names(connectionProbabilities)[iiRow] <-
-                    paste(c(jjProperty, connectionBunches[[jjProperty]]), collapse = '.')
+                    rownames(cntMatrixC)[iiRow]               <-
+                        names(connectionProbabilities)[iiRow] <-
+                        paste(c(jjProperty, connectionBunches[[jjProperty]][mmContextPairs[, kkkPair]]), collapse = '.')
 
-                iiRow <- iiRow + 1
+                    iiRow <- iiRow + 1
+                }
             }
         }
 
@@ -342,7 +369,7 @@ cntMatrices <- function (x) {
 
         return(out)
     } else {
-        stop('x is not a divhotomous RVSystem')
+        stop('x is not a dichotomous RVSystem')
     }
 }
 
@@ -370,11 +397,11 @@ isCntMatrices <- function (x) {
         return(test)
     }
 
-    if (class(x[['cntMatrixL']]) == 'simple_triplet_matrix') {
+    if (any(class(x[['cntMatrixL']]) == 'simple_triplet_matrix')) {
         require('slam')
     }
 
-    if (class(x[['cntMatrixL']]) == 'Matrix') {
+    if (any(class(x[['cntMatrixL']]) == 'Matrix')) {
         require('Matrix')
     }
 
@@ -479,20 +506,32 @@ CNT1 <- function (x) {
 
 
         if (class(x[['cntMatrixL']]) == 'simple_triplet_matrix') {
-            CNT1 <- sum(x[['connectionProbabilities']] -
-                            slam::matprod_simple_triplet_matrix(x = x[['cntMatrixC']],
-                                                                y = optimalCoupling[['solution']]))
+            fittedLow <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixL']],
+                                                             y = optimalCoupling[['solution']]))
+            fittedCon <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixC']],
+                                                             y = optimalCoupling[['solution']]))
+            fittedBun <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixB']],
+                                                             y = optimalCoupling[['solution']]))
         } else {
-            CNT1 <- sum(x[['connectionProbabilities']] - (x[['cntMatrixC']] %*% optimalCoupling[['solution']]))
+            fittedLow <- t(x[['cntMatrixL']] %*% optimalCoupling[['solution']])
+            fittedCon <- t(x[['cntMatrixC']] %*% optimalCoupling[['solution']])
+            fittedBun <- t(x[['cntMatrixB']] %*% optimalCoupling[['solution']])
         }
 
-        if (abs(CNT1) < (200 * .Machine$double.eps)) {
+        CNT1 <- sum(abs(x[['connectionProbabilities']] - fittedCon))
+
+        if (CNT1 < (200 * .Machine$double.eps)) {
             CNT1 <- 0
         }
 
         output <- list(CNT1 = CNT1, solution = optimalCoupling[['solution']],
-                       status = optimalCoupling[['status']])
+                       status = optimalCoupling[['status']],
+                       fittedLow = fittedLow, fittedCon = fittedCon, fittedBun = fittedBun)
         class(output) <- 'Cnt.Meas'
+
+        if (output[['status']] != 0) {
+            warning('Warning!. Linear programming failed to find an optimal solution')
+        }
 
         return(output)
     } else {
@@ -547,24 +586,33 @@ CNT2 <- function (x) {
                                           max = FALSE)
 
 
-        if (class(x[['cntMatrixL']]) == 'simple_triplet_matrix') {
-            CNT2 <- sum(abs(x[['bunchProbabilities']] -
-                                slam::matprod_simple_triplet_matrix(x = x[['cntMatrixB']],
-                                                                    y = optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])])
-            ))
+        if (class(x[['cntMatrixB']]) == 'simple_triplet_matrix') {
+            fittedLow <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixL']][, 1:ncol(x[['cntMatrixB']])],
+                                                             y = optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])]))
+            fittedCon <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixC']][, 1:ncol(x[['cntMatrixB']])],
+                                                             y = optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])]))
+            fittedBun <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixB']],
+                                                             y = optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])]))
         } else {
-            CNT2 <- sum(abs(x[['connectionProbabilities']] -
-                                (x[['cntMatrixB']] %*%
-                                     optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])])))
+            fittedLow <- t(x[['cntMatrixL']][, 1:ncol(x[['cntMatrixB']])] %*% optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])])
+            fittedCon <- t(x[['cntMatrixC']][, 1:ncol(x[['cntMatrixB']])] %*% optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])])
+            fittedBun <- t(x[['cntMatrixB']][, 1:ncol(x[['cntMatrixB']])] %*% optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])])
         }
+
+        CNT2 <- sum(abs(x[['bunchProbabilities']] - fittedBun))
 
         if (abs(CNT2) < (200 * .Machine$double.eps)) {
             CNT2 <- 0
         }
 
         output <- list(CNT2 = CNT2, solution = optimalCoupling[['solution']],
-                       status = optimalCoupling[['status']])
+                       status = optimalCoupling[['status']],
+                       fittedLow = fittedLow, fittedCon = fittedCon, fittedBun = fittedBun)
         class(output) <- 'Cnt.Meas'
+
+        if (output[['status']] != 0) {
+            warning('Warning!. Linear programming failed to find an optimal solution')
+        }
 
         return(output)
     } else {
@@ -593,7 +641,9 @@ NCNT2 <- function (x, coupling = NULL) {
             coupling <- FindCoupling(x)
         }
 
-        if (coupling[['status']] == 0) {
+        optimalCoupling <- coupling
+
+        if ((coupling[['status']] == 0) & (nrow(x[['cntMatrixB']]) > 0)) {
             dMatrix <- diag(nrow = nrow(x[['cntMatrixB']]))
 
             x[['cntMatrixL']] <- cbind(x[['cntMatrixL']],
@@ -614,29 +664,38 @@ NCNT2 <- function (x, coupling = NULL) {
             optimalCouplingPlus <- optimalCouplingMinus <- list()
             optimalDs <- numeric(nrow(dMatrix))
 
-            for (iiD in seq(nrow(dMatrix))) {
+            if (nrow(dMatrix) > 0) {
+                for (iiD in seq(nrow(dMatrix))) {
 
-                matPlus  <- rbind(x[['cntMatrixL']],
-                                  cbind(x[['cntMatrixB']], dMatrix[, iiD]),
-                                  x[['cntMatrixC']])
+                    matPlus  <- rbind(x[['cntMatrixL']],
+                                      cbind(x[['cntMatrixB']], dMatrix[, iiD]),
+                                      x[['cntMatrixC']])
 
-                matMinus <- rbind(x[['cntMatrixL']],
-                                  cbind(x[['cntMatrixB']], -dMatrix[, iiD]),
-                                  x[['cntMatrixC']])
-
-
-                optimalCouplingPlus[[iiD]]  <- Rglpk_solve_LP(obj = obj, mat = matPlus, dir = dir, rhs = rhs,
-                                                              max = TRUE)
-
-                optimalCouplingMinus[[iiD]] <- Rglpk_solve_LP(obj = obj, mat = matMinus, dir = dir, rhs = rhs,
-                                                              max = TRUE)
+                    matMinus <- rbind(x[['cntMatrixL']],
+                                      cbind(x[['cntMatrixB']], -dMatrix[, iiD]),
+                                      x[['cntMatrixC']])
 
 
-                optimalDs[iiD] <- min(optimalCouplingPlus[[iiD]][['solution']][length(obj)],
-                                      optimalCouplingMinus[[iiD]][['solution']][length(obj)])
+                    optimalCouplingPlus[[iiD]]  <- Rglpk_solve_LP(obj = obj, mat = matPlus, dir = dir, rhs = rhs,
+                                                                  max = TRUE)
+
+                    optimalCouplingMinus[[iiD]] <- Rglpk_solve_LP(obj = obj, mat = matMinus, dir = dir, rhs = rhs,
+                                                                  max = TRUE)
+
+
+                    optimalDs[iiD] <- min(optimalCouplingPlus[[iiD]][['solution']][length(obj)],
+                                          optimalCouplingMinus[[iiD]][['solution']][length(obj)])
+                }
+
+                x[['cntMatrixL']] <- x[['cntMatrixL']][, -ncol(x[['cntMatrixL']])]
+                x[['cntMatrixC']] <- x[['cntMatrixC']][, -ncol(x[['cntMatrixC']])]
+
+
+                NCNT2 <- min(optimalDs)
+            } else {
+                NCNT2 <- 0
             }
 
-            NCNT2 <- min(optimalDs)
         } else {
             NCNT2 <- 0
         }
@@ -645,9 +704,22 @@ NCNT2 <- function (x, coupling = NULL) {
             NCNT2 <- 0
         }
 
+        if (class(x[['cntMatrixB']]) == 'simple_triplet_matrix') {
+            fittedLow <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixL']],
+                                                             y = optimalCoupling[['solution']]))
+            fittedCon <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixC']],
+                                                             y = optimalCoupling[['solution']]))
+            fittedBun <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixB']],
+                                                             y = optimalCoupling[['solution']]))
+        } else {
+            fittedLow <- t(x[['cntMatrixL']] %*% optimalCoupling[['solution']])
+            fittedCon <- t(x[['cntMatrixC']] %*% optimalCoupling[['solution']])
+            fittedBun <- t(x[['cntMatrixB']] %*% optimalCoupling[['solution']])
+        }
 
         output <- list(NCNT2 = NCNT2, solution = coupling[['solution']],
-                       status = coupling[['status']])
+                       status = coupling[['status']],
+                       fittedLow = fittedLow, fittedCon = fittedCon, fittedBun = fittedBun)
         class(output) <- 'Cnt.Meas'
 
         return(output)
@@ -656,6 +728,384 @@ NCNT2 <- function (x, coupling = NULL) {
     }
 }
 
+
+#' Compute the hierarchical contextuality measure CNT2h
+#'
+#' CNT2h(x) returns a list containing:
+#'     CNT2h: The value of the CNT2h contextuality measure
+#'     solution: The solution found for optimal coupling
+#'     status: Whether the solution was successfully found in the linear programming task.
+#'         It will return 0 for the optimal solution being found, and non-zero otherwise.
+#'
+#'
+#' @param x a cntMatrices object
+#' @return A Cnt.Meas object with the CNT2 measure
+CNT2h <- function (x) {
+    if (suppressMessages(isCntMatrices(x))) {
+        require('Rglpk')
+
+        if (length(x[['bunchProbabilities']]) >= 1) {
+
+            namesProperties <- unique(unlist(lapply(strsplit(names(x[['lowMargins']])[-1], '\\.'),
+                                                    function (y) y[2])
+            ))
+
+            bunchLevel <- unlist(lapply(lapply(strsplit(rownames(x[['cntMatrixB']]), '\\.'),
+                                               function (y)
+                                                   namesProperties %in% y), sum))
+
+            opt <- 0
+            for (llLevel in unique(bunchLevel)) {
+
+                minusLimit <- cbind(x[['cntMatrixB']][bunchLevel == llLevel, ],
+                                    -diag(nrow = sum(bunchLevel == llLevel)))
+
+                plusLimit  <- cbind(x[['cntMatrixB']][bunchLevel == llLevel, ],
+                                    diag(nrow = sum(bunchLevel == llLevel)))
+
+                tempLowMat <- cbind(x[['cntMatrixL']],
+                                    matrix(rep(0, nrow(plusLimit) * nrow(x[['cntMatrixL']])),
+                                           nrow = nrow(x[['cntMatrixL']])))
+                if (sum(bunchLevel < llLevel) == 0) {
+                    if (class(x[['cntMatrixB']]) == 'simple_triplet_matrix') {
+                        tempBunMat <- x[['cntMatrixB']][bunchLevel < llLevel, ]
+                        tempBunMat$ncol <- ncol(plusLimit)
+                    } else {
+                        tempBunMat <- matrix(numeric(), ncol = ncol(plusLimit))
+                    }
+                } else {
+                    tempBunMat <- cbind(x[['cntMatrixB']][bunchLevel < llLevel, ],
+                                        matrix(rep(0, max(nrow(plusLimit) * nrow(x[['cntMatrixB']][bunchLevel < llLevel, ]),
+                                                          nrow(plusLimit))),
+                                               nrow = nrow(x[['cntMatrixB']][bunchLevel < llLevel, ])))
+                }
+
+                tempConMat <- cbind(x[['cntMatrixC']],
+                                    matrix(rep(0, nrow(plusLimit) * nrow(x[['cntMatrixC']])),
+                                           nrow = nrow(x[['cntMatrixC']])))
+
+                obj <- c(rep(0, ncol(x[['cntMatrixB']])), rep(1, nrow(plusLimit)))
+                mat <- rbind(tempLowMat, tempConMat, tempBunMat,
+                             minusLimit, plusLimit)
+                dir <- c(rep('==', nrow(tempLowMat) + nrow(tempConMat) + nrow(tempBunMat)),
+                         rep('<=', nrow(minusLimit)),
+                         rep('>=', nrow(plusLimit)))
+                rhs <- c(x[['lowMargins']],
+                         x[['connectionProbabilities']],
+                         x[['bunchProbabilities']][bunchLevel <  llLevel],
+                         x[['bunchProbabilities']][bunchLevel == llLevel],
+                         x[['bunchProbabilities']][bunchLevel == llLevel])
+
+                optimalCoupling <- Rglpk_solve_LP(obj = obj, mat = mat, dir = dir, rhs = rhs,
+                                                  max = FALSE)
+
+                opt <- optimalCoupling$optimum
+
+                if (opt > 200 * .Machine$double.eps) {
+                    break
+                }
+
+            }
+
+            CNT2h <- sum(opt)
+
+            if (class(x[['cntMatrixB']]) == 'simple_triplet_matrix') {
+                fittedLow <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixL']][, 1:ncol(x[['cntMatrixB']])],
+                                                                 y = optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])]))
+                fittedCon <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixC']][, 1:ncol(x[['cntMatrixB']])],
+                                                                 y = optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])]))
+                fittedBun <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixB']],
+                                                                 y = optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])]))
+            } else {
+                fittedLow <- t(x[['cntMatrixL']][, 1:ncol(x[['cntMatrixB']])] %*% optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])])
+                fittedCon <- t(x[['cntMatrixC']][, 1:ncol(x[['cntMatrixB']])] %*% optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])])
+                fittedBun <- t(x[['cntMatrixB']][, 1:ncol(x[['cntMatrixB']])] %*% optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])])
+            }
+
+
+            if (abs(CNT2h) < (200 * .Machine$double.eps)) {
+                CNT2h <- 0
+            }
+
+
+
+            upperCNT2h <- upperLevels <- numeric(length = max(bunchLevel) - llLevel)
+            upperFits <- list()
+
+            if (llLevel < max(bunchLevel)) {
+
+                iiUpper <- 1
+                for (mmLevel in seq(from = llLevel + 1, to = max(bunchLevel))) {
+
+                    minusLimit <- cbind(x[['cntMatrixB']][bunchLevel >= llLevel & bunchLevel <= mmLevel, ],
+                                        -diag(nrow = sum(bunchLevel >= llLevel & bunchLevel <= mmLevel)))
+
+                    plusLimit  <- cbind(x[['cntMatrixB']][bunchLevel >= llLevel & bunchLevel <= mmLevel, ],
+                                        diag(nrow = sum(bunchLevel >= llLevel & bunchLevel <= mmLevel)))
+
+                    tempLowMat <- cbind(x[['cntMatrixL']],
+                                        matrix(rep(0, nrow(plusLimit) * nrow(x[['cntMatrixL']])),
+                                               nrow = nrow(x[['cntMatrixL']])))
+                    if (sum(bunchLevel < llLevel) == 0) {
+                        if (class(x[['cntMatrixB']]) == 'simple_triplet_matrix') {
+                            tempBunMat <- x[['cntMatrixB']][bunchLevel < llLevel, ]
+                            tempBunMat$ncol <- ncol(plusLimit)
+                        } else {
+                            tempBunMat <- matrix(numeric(), ncol = ncol(plusLimit))
+                        }
+                    } else {
+                        tempBunMat <- cbind(x[['cntMatrixB']][bunchLevel < llLevel, ],
+                                            matrix(rep(0, max(nrow(plusLimit) * nrow(x[['cntMatrixB']][bunchLevel < llLevel, ]),
+                                                              nrow(plusLimit))),
+                                                   nrow = nrow(x[['cntMatrixB']][bunchLevel < llLevel, ])))
+                    }
+
+                    tempConMat <- cbind(x[['cntMatrixC']],
+                                        matrix(rep(0, nrow(plusLimit) * nrow(x[['cntMatrixC']])),
+                                               nrow = nrow(x[['cntMatrixC']])))
+
+                    obj <- c(rep(0, ncol(x[['cntMatrixB']])), rep(1, nrow(plusLimit)))
+                    mat <- rbind(tempLowMat, tempConMat, tempBunMat,
+                                 minusLimit, plusLimit)
+                    dir <- c(rep('==', nrow(tempLowMat) + nrow(tempConMat) + nrow(tempBunMat)),
+                             rep('<=', nrow(minusLimit)),
+                             rep('>=', nrow(plusLimit)))
+                    rhs <- c(x[['lowMargins']],
+                             x[['connectionProbabilities']],
+                             x[['bunchProbabilities']][bunchLevel <  llLevel],
+                             x[['bunchProbabilities']][bunchLevel >= llLevel & bunchLevel <= mmLevel],
+                             x[['bunchProbabilities']][bunchLevel >= llLevel & bunchLevel <= mmLevel])
+
+                    optimalCoupling <- Rglpk_solve_LP(obj = obj, mat = mat, dir = dir, rhs = rhs,
+                                                      max = FALSE)
+
+                    opt <- optimalCoupling$optimum
+
+                    upperCNT2h[iiUpper]  <- sum(opt)
+                    upperLevels[iiUpper] <- mmLevel
+                    upperFits[[iiUpper]] <- list()
+
+                    if (class(x[['cntMatrixB']]) == 'simple_triplet_matrix') {
+                        upperFits[[iiUpper]][['fittedLow']] <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixL']][, 1:ncol(x[['cntMatrixB']])],
+                                                                         y = optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])]))
+                        upperFits[[iiUpper]][['fittedCon']] <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixC']][, 1:ncol(x[['cntMatrixB']])],
+                                                                         y = optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])]))
+                        upperFits[[iiUpper]][['fittedBun']] <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixB']],
+                                                                         y = optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])]))
+                    } else {
+                        upperFits[[iiUpper]][['fittedLow']] <- t(x[['cntMatrixL']][, 1:ncol(x[['cntMatrixB']])] %*% optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])])
+                        upperFits[[iiUpper]][['fittedCon']] <- t(x[['cntMatrixC']][, 1:ncol(x[['cntMatrixB']])] %*% optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])])
+                        upperFits[[iiUpper]][['fittedBun']] <- t(x[['cntMatrixB']][, 1:ncol(x[['cntMatrixB']])] %*% optimalCoupling[['solution']][1:ncol(x[['cntMatrixB']])])
+                    }
+
+                    iiUpper <- iiUpper + 1
+                }
+            }
+
+        } else {
+            CNT2h <- 0
+            optimalCoupling <- FindCoupling(x)
+            fittedLow <- x[['lowMargins']]
+            fittedCon <- x[['connectionProbabilities']]
+            fittedBun <- x[['bunchProbabilities']]
+        }
+
+        output <- list(CNT2h = CNT2h, level = llLevel, solution = optimalCoupling[['solution']],
+                       status = optimalCoupling[['status']],
+                       fittedLow = fittedLow, fittedCon = fittedCon, fittedBun = fittedBun)
+
+
+        if (exists('upperCNT2h', inherits = FALSE) && length(upperCNT2h) > 0) {
+            output[['upperCNT2h']]  <- upperCNT2h
+            output[['upperLevels']] <- upperLevels
+            output[['upperFits']]   <- upperFits
+        }
+
+
+        class(output) <- 'Cnt.Meas'
+
+        return(output)
+    } else {
+        stop('x is not a cntMatrices object')
+    }
+}
+
+#' Compute the hierarchical noncontextuality measure NCNT2h
+#'
+#' NCNT2h(x) returns a list containing:
+#'     NCNT2h: The value of the NCNT2h contextuality measure
+#'     solution: The solution found for optimal coupling
+#'     status: Whether the solution was successfully found in the linear programming task.
+#'         It will return 0 for the optimal solution being found, and non-zero otherwise.
+#'
+#'
+#' @param x a cntMatrices object
+#' @return A Cnt.Meas object with the NCNT2 measure
+NCNT2h <- function (x) {
+    if (suppressMessages(isCntMatrices(x))) {
+        require('Rglpk')
+
+        NCNT2h <- 0
+        optimalCoupling <- FindCoupling(x)
+
+        if (length(x[['bunchProbabilities']]) >= 1) {
+
+            namesProperties <- unique(unlist(lapply(strsplit(names(x[['lowMargins']])[-1], '\\.'),
+                                                    function (y) y[2])
+            ))
+
+            bunchLevel <- unlist(lapply(lapply(strsplit(rownames(x[['cntMatrixB']]), '\\.'),
+                                               function (y)
+                                                   namesProperties %in% y), sum))
+
+            tempLowMat <- cbind(x[['cntMatrixL']],
+                                matrix(rep(0, nrow(x[['cntMatrixL']])),
+                                       nrow = nrow(x[['cntMatrixL']])))
+
+            tempConMat <- cbind(x[['cntMatrixC']],
+                                matrix(rep(0, nrow(x[['cntMatrixC']])),
+                                       nrow = nrow(x[['cntMatrixC']])))
+
+            obj <- c(rep(0, ncol(x[['cntMatrixB']])), 1)
+
+            lowerNCNT2h <- numeric(length(unique(bunchLevel)))
+            lowerLevels <- numeric(length(unique(bunchLevel)))
+            lowerFits   <- list()
+
+            opt <- 0
+            for (llLevel in unique(bunchLevel)) {
+
+                y <- x
+                y[['cntMatrixB']] <- x[['cntMatrixB']][bunchLevel <= llLevel, ]
+                y[['bunchProbabilities']] <- x[['bunchProbabilities']][bunchLevel <= llLevel]
+
+                optimalCouplingCheck  <- FindCoupling(y)
+
+                status <- optimalCouplingCheck$status
+
+                if (status > 0) {
+                    llLevel <- llLevel - 1
+                    break
+                }
+
+                dMatrix  <- diag(nrow = sum(bunchLevel == llLevel))
+
+                optimalCouplingPlus <- optimalCouplingMinus <- list()
+                optimalDs <- numeric(nrow(dMatrix))
+
+                if (nrow(dMatrix) > 0) {
+                    for (iiD in seq(nrow(dMatrix))) {
+
+                        matPlus  <- cbind(x[['cntMatrixB']][bunchLevel == llLevel, ],  dMatrix[, iiD])
+                        matMinus <- cbind(x[['cntMatrixB']][bunchLevel == llLevel, ], -dMatrix[, iiD])
+
+                        if (sum(bunchLevel < llLevel) == 0) {
+                            if (class(x[['cntMatrixB']]) == 'simple_triplet_matrix') {
+                                tempBunMat <- x[['cntMatrixB']][bunchLevel < llLevel, ]
+                                tempBunMat$ncol <- ncol(matPlus)
+                            } else {
+                                tempBunMat <- matrix(numeric(), ncol = ncol(matPlus))
+                            }
+                        } else {
+                            tempBunMat <- cbind(x[['cntMatrixB']][bunchLevel < llLevel, ],
+                                                matrix(rep(0, nrow(x[['cntMatrixB']][bunchLevel < llLevel, ])),
+                                                       nrow = nrow(x[['cntMatrixB']][bunchLevel < llLevel, ])))
+                        }
+
+                        matP <- rbind(tempLowMat, tempConMat, tempBunMat,
+                                      matPlus)
+
+                        matM <- rbind(tempLowMat, tempConMat, tempBunMat,
+                                      matMinus)
+
+                        dir <- c(rep('==', nrow(tempLowMat) + nrow(tempConMat) + nrow(tempBunMat) + nrow(matPlus)))
+                        rhs <- c(x[['lowMargins']],
+                                 x[['connectionProbabilities']],
+                                 x[['bunchProbabilities']][bunchLevel <  llLevel],
+                                 x[['bunchProbabilities']][bunchLevel == llLevel])
+
+
+                        optimalCouplingPlus[[iiD]]  <- Rglpk_solve_LP(obj = obj, mat = matP, dir = dir, rhs = rhs,
+                                                                      max = TRUE)
+
+                        optimalCouplingMinus[[iiD]] <- Rglpk_solve_LP(obj = obj, mat = matM, dir = dir, rhs = rhs,
+                                                                      max = TRUE)
+
+
+                        optimalDs[iiD] <- min(optimalCouplingPlus[[iiD]][['solution']][length(obj)],
+                                              optimalCouplingMinus[[iiD]][['solution']][length(obj)])
+                    }
+
+                    NCNT2h <- min(optimalDs)
+
+                    if (abs(NCNT2h) < (200 * .Machine$double.eps)) {
+                        NCNT2h <- 0
+                    }
+
+                    lowerNCNT2h[llLevel - 1] <- NCNT2h
+                    lowerLevels[llLevel - 1] <- llLevel
+                    lowerFits[[llLevel - 1]]   <- list()
+
+                    optimalCoupling <- optimalCouplingCheck
+
+                    if (class(x[['cntMatrixB']]) == 'simple_triplet_matrix') {
+                        lowerFits[[llLevel - 1]][['fittedLow']] <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixL']],
+                                                                                                       y = optimalCoupling[['solution']]))
+                        lowerFits[[llLevel - 1]][['fittedCon']] <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixC']],
+                                                                                                       y = optimalCoupling[['solution']]))
+                        lowerFits[[llLevel - 1]][['fittedBun']] <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixB']],
+                                                                                                       y = optimalCoupling[['solution']]))
+                    } else {
+                        lowerFits[[llLevel - 1]][['fittedLow']] <- t(x[['cntMatrixL']] %*% optimalCoupling[['solution']])
+                        lowerFits[[llLevel - 1]][['fittedCon']] <- t(x[['cntMatrixC']] %*% optimalCoupling[['solution']])
+                        lowerFits[[llLevel - 1]][['fittedBun']] <- t(x[['cntMatrixB']] %*% optimalCoupling[['solution']])
+                    }
+
+                }
+
+            }
+
+            if (any(lowerLevels == 0)) {
+                keep   <- which(lowerLevels > 0)
+                lowerNCNT2h <- lowerNCNT2h[keep]
+                lowerLevels <- lowerLevels[keep]
+            }
+
+            if (class(x[['cntMatrixB']]) == 'simple_triplet_matrix') {
+                fittedLow <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixL']],
+                                                                 y = optimalCoupling[['solution']]))
+                fittedCon <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixC']],
+                                                                 y = optimalCoupling[['solution']]))
+                fittedBun <- t(slam::matprod_simple_triplet_matrix(x = x[['cntMatrixB']],
+                                                                 y = optimalCoupling[['solution']]))
+            } else {
+                fittedLow <- t(x[['cntMatrixL']] %*% optimalCoupling[['solution']])
+                fittedCon <- t(x[['cntMatrixC']] %*% optimalCoupling[['solution']])
+                fittedBun <- t(x[['cntMatrixB']] %*% optimalCoupling[['solution']])
+            }
+
+
+        } else {
+            llLevel <- 1
+        }
+
+        output <- list(NCNT2h = NCNT2h, level = max(get0('lowerLevels'), 1), solution = optimalCoupling[['solution']],
+                       status = optimalCoupling[['status']],
+                       fittedLow = fittedLow, fittedCon = fittedCon, fittedBun = fittedBun)
+
+        if (exists('lowerNCNT2h', inherits = FALSE) && length(lowerNCNT2h) > 0) {
+            output[['lowerNCNT2h']]  <- lowerNCNT2h
+            output[['lowerLevels']] <- lowerLevels
+            output[['lowerFits']]   <- lowerFits
+        }
+
+        class(output) <- 'Cnt.Meas'
+
+        return(output)
+    } else {
+        stop('x is not a cntMatrices object')
+    }
+}
 
 
 
@@ -696,8 +1146,22 @@ CNT3 <- function (x) {
             CNT3 <- 0
         }
 
+        if (class(x[['cntMatrixB']]) == 'simple_triplet_matrix') {
+            fittedLow <- t(slam::matprod_simple_triplet_matrix(x = cbind(x[['cntMatrixL']], -x[['cntMatrixL']]),
+                                                             y = optimalCoupling[['solution']]))
+            fittedCon <- t(slam::matprod_simple_triplet_matrix(x = cbind(x[['cntMatrixC']], -x[['cntMatrixC']]),
+                                                             y = optimalCoupling[['solution']]))
+            fittedBun <- t(slam::matprod_simple_triplet_matrix(x = cbind(x[['cntMatrixB']], -x[['cntMatrixB']]),
+                                                             y = optimalCoupling[['solution']]))
+        } else {
+            fittedLow <- t(x[['cntMatrixL']] %*% optimalCoupling[['solution']])
+            fittedCon <- t(x[['cntMatrixC']] %*% optimalCoupling[['solution']])
+            fittedBun <- t(x[['cntMatrixB']] %*% optimalCoupling[['solution']])
+        }
+
         output <- list(CNT3 = CNT3, solution = optimalCoupling[['solution']],
-                       status = optimalCoupling[['status']])
+                       status = optimalCoupling[['status']],
+                       fittedLow = fittedLow, fittedCon = fittedCon, fittedBun = fittedBun)
         class(output) <- 'Cnt.Meas'
 
         return(output)
@@ -705,6 +1169,52 @@ CNT3 <- function (x) {
         stop('x is not a cntMatrices object')
     }
 }
+
+
+
+#' Compute the contextuality measure CNFR - Contextual fraction
+#' under the consistification of systems
+#'
+#' CNFR(x) returns a list containing:
+#'     CNFR: The value of the CNFR contextuality measure
+#'     solution: The solution found for optimal coupling
+#'     status: Whether the solution was successfully found in the linear programming task.
+#'         It will return 0 for the optimal solution being found, and non-zero otherwise.
+#'
+#'
+#' @param x a cntMatrices object
+#' @return A Cnt.Meas object with the CNFR measure
+CNFR <- function (x) {
+    if (any(class(x) == 'cntFracMatrices') & suppressMessages(isCntMatrices(x))) {
+        require('Rglpk')
+
+        obj <- rep(1, ncol(x[['cntMatrixL']]))
+        mat <- rbind(x[['cntMatrixB']], x[['cntMatrixC']])
+        dir <- c(rep('<=', nrow(x[['cntMatrixB']]) + nrow(x[['cntMatrixC']])))
+        rhs <- c(x[['bunchProbabilities']],
+                 x[['connectionProbabilities']])
+
+        optimalCoupling <- Rglpk_solve_LP(obj = obj, mat = mat, dir = dir, rhs = rhs,
+                                          max = TRUE)
+
+
+        CNFR <- 1 - optimalCoupling[['optimum']]
+
+        if (abs(CNFR) < (200 * .Machine$double.eps)) {
+            CNFR <- 0
+        }
+
+        output <- list(CNFR = CNFR, solution = optimalCoupling[['solution']],
+                       status = optimalCoupling[['status']])
+        class(output) <- 'Cnt.Meas'
+
+        return(output)
+    } else {
+        stop('x is not a cntFracMatrices object')
+    }
+}
+
+
 
 
 
@@ -731,7 +1241,7 @@ FindCoupling <- function (x) {
         coupling <- Rglpk_solve_LP(obj = obj, mat = mat, dir = dir, rhs = rhs,
                                    max = FALSE)
 
-        return(list(solution = coupling[['solution']], status = coupling[['status']]))
+        return(list(solution = coupling[['solution']], status = coupling[['status']], optimum = coupling[['optimum']]))
     } else {
         stop('x is not a cntMatrices object')
     }
@@ -823,11 +1333,12 @@ SimpleMSBinaryCyclic <- function(x, values = NULL) {
 
         for (iiProperty in properties) {
             expectationsList[[iiProperty]] <- x[['lowMargins']][grep(
-                pattern = paste0('.', iiProperty),
+                pattern = paste0('.', iiProperty, '(\\.|$)'),
+                perl = TRUE,
                 x = names(x[["lowMargins"]])
             )]
             if (length(expectationsList[[iiProperty]]) != 2) {
-                stop(iiProperty, ' appears in more (or less) than two contexts.\\System cannot be cyclic.')
+                stop(iiProperty, ' appears in more (or less) than two contexts.\nSystem cannot be cyclic.')
             }
 
             expectationsList[[iiProperty]] <- (values[1] * expectationsList[[iiProperty]]) +
@@ -940,11 +1451,11 @@ RectangleProductDistance <- function(x, values = NULL) {
         distances <- productExpectations <- numeric(length = length(contexts))
 
         for (iiContext in seq_along(contexts)) {
-            jjMargins <- grep(pattern = contexts[iiContext],
+            jjMargins <- grep(pattern = paste0('^', contexts[iiContext], '\\.'),
                               x = names(x[['lowMargins']]))
 
             cell11 <- x[['bunchProbabilities']][
-                grep(pattern = contexts[iiContext],
+                grep(pattern = paste0('^', contexts[iiContext], '\\.'),
                      x = names(x[['bunchProbabilities']]))
                 ]
 
@@ -979,7 +1490,7 @@ RectangleProductDistance <- function(x, values = NULL) {
 DeltaCFunction <- function(x, values = NULL) {
 
     if (suppressMessages(isDRVSystem(x))) {
-        x <- cntMatrices(x)
+        x <- cntMatrices(x, withMatrices = FALSE)
     }
 
     if (is.null(values)) {
@@ -994,12 +1505,16 @@ DeltaCFunction <- function(x, values = NULL) {
                                   function (y) y[1]))
         diagonalExpectations <- numeric(length = length(contexts))
         for (iiContext in seq_along(contexts)) {
-            jjMargins <- grep(pattern = contexts[iiContext],
+            jjMargins <- grep(pattern = paste0('^', contexts[iiContext], '\\.'),
                               x = names(x[['lowMargins']]))
             margins <- x[['lowMargins']][jjMargins]
 
+            if (length(margins) != 2) {
+                stop(contexts[iiContext], ' contains more (or less) than two variables.\nSystem cannot be cyclic.')
+            }
+
             cell11 <- x[['bunchProbabilities']][
-                grep(pattern = contexts[iiContext],
+                grep(pattern = paste0('^', contexts[iiContext], '\\.'),
                      x = names(x[['bunchProbabilities']]))
                 ]
             diagonalExpectations[iiContext] <- ((values[1]^2) * cell11) +
@@ -1009,7 +1524,10 @@ DeltaCFunction <- function(x, values = NULL) {
 
         lambdaC <- S1Function(diagonalExpectations)
 
-        deltaC <- lambdaC - sMS - length(x[['bunchProbabilities']]) + 2
+        Delta  <- min(sMS + length(x[['bunchProbabilities']]) - 2,
+                      length(x[['bunchProbabilities']]))
+
+        deltaC <- lambdaC - Delta
 
         mA     <- RectangleProductDistance(x, values)
 
@@ -1028,7 +1546,7 @@ DeltaCFunction <- function(x, values = NULL) {
 
 
 
-#' Construct the reduced Boolean Matrix for the linear programming
+#' Construct the Boolean Matrix for the linear programming
 #' for computing the contextual fraction measure
 #'
 #' cntFracMatrices(x) returns a list containing:
@@ -1065,15 +1583,10 @@ cntFracMatrices <- function (x) {
         names(ferValues) <- names(refValues) <- namesProperties
 
         for (iiName in namesProperties) {
-
             for (jjContext in names(x)) {
-
                 if (iiName %in% names(dimnames(x[[jjContext]]))) {
-
                     ferValues[iiName] <-  dimnames(x[[jjContext]])[[iiName]][1]
                     refValues[iiName] <-  dimnames(x[[jjContext]])[[iiName]][2]
-
-                    break
                 }
             }
         }
@@ -1127,7 +1640,7 @@ cntFracMatrices <- function (x) {
 
         bunchesVariables    <- lapply(x, function (y) names(dimnames(y)))
         nBunchesVariables   <- sapply(x, function (y) length(dim(y)))
-        nBunchProbabilities <- sum(2 * (2 ^ nBunchesVariables))
+        nBunchProbabilities <- sum(2 ^ nBunchesVariables)
 
         cntMatrixB <- slam::simple_triplet_zero_matrix(nrow = nBunchProbabilities,
                                                        ncol = nColumns,
@@ -1137,19 +1650,36 @@ cntFracMatrices <- function (x) {
         bunchProbabilities <- integer(nBunchProbabilities)
         names(bunchProbabilities) <- rep('', nBunchProbabilities)
 
-        iiRow <- 1
-        for (jjContext in names(x)) {
+        if (nBunchProbabilities > 1) {
+            iiRow <- 1
+            for (jjContext in names(x)) {
 
-            contextProbabilities <- as.data.frame(x[[jjContext]])
-            contextVariables     <- names(contextProbabilities)[
-                -grep('Freq', names(contextProbabilities))
-                ]
+                contextProbabilities <- as.data.frame(x[[jjContext]])
+                contextVariables     <- names(contextProbabilities)[
+                    -grep('Freq', names(contextProbabilities))
+                    ]
 
-            for (kkVariable in contextVariables) {
-                contextProbabilities[, kkVariable] <- paste0(kkVariable, '.',
-                                                             contextProbabilities[, kkVariable])
+                for (kkVariable in contextVariables) {
+                    contextProbabilities[, kkVariable] <- paste0(kkVariable, '.',
+                                                                 contextProbabilities[, kkVariable])
+                }
+
+                for (mmCell in seq(nrow(contextProbabilities))) {
+                    bunchProbabilities[iiRow]        <- contextProbabilities[mmCell, 'Freq']
+
+                    cntMatrixB[iiRow, ] <- apply(cntMatrixL[paste0(jjContext, '.',
+                                                                   contextProbabilities[mmCell,
+                                                                                        -grep('Freq', names(contextProbabilities))])
+                                                            , ], 2, prod)
+
+                    rownames(cntMatrixB)[iiRow] <- names(bunchProbabilities)[iiRow] <- paste0(jjContext, '.',
+                                                                                              paste(contextProbabilities[mmCell,
+                                                                                                                         -grep('Freq', names(contextProbabilities))
+                                                                                                                         ], collapse = '.'))
+
+                    iiRow <- iiRow + 1
+                }
             }
-
         }
 
         # Connection probabilities
@@ -1166,7 +1696,7 @@ cntFracMatrices <- function (x) {
         names(connectionBunches) <- namesProperties
 
         nConnectionVariables     <- sapply(connectionBunches, length)
-        nConnectionProbabilities <- sum(choose(nConnectionVariables, 2))
+        nConnectionProbabilities <- 4 * sum(choose(nConnectionVariables, 2))
 
         cntMatrixC <- slam::simple_triplet_zero_matrix(nrow = nConnectionProbabilities,
                                                        ncol = nColumns,
@@ -1176,29 +1706,52 @@ cntFracMatrices <- function (x) {
         connectionProbabilities <- integer(nConnectionProbabilities)
         names(connectionProbabilities) <- rep('', nConnectionProbabilities)
 
-        iiRow <- 1
-        for (jjProperty in namesProperties) {
+        if (nConnectionProbabilities > 1) {
+            iiRow <- 1
+            for (jjProperty in namesProperties) {
 
-            mmContextPairs <- combn(x = seq_along(connectionBunches[[jjProperty]]),
-                                    m = 2)
+                mmContextPairs <- combn(x = seq_along(connectionBunches[[jjProperty]]),
+                                        m = 2)
 
-            for (kkkPair in seq(ncol(mmContextPairs))) {
+                for (kkkPair in seq(ncol(mmContextPairs))) {
 
-                indexContexts  <- mmContextPairs[, kkkPair]
-                namesContexts  <- connectionBunches[[jjProperty]][indexContexts]
-                valuesVariables <- rep(refValues[jjProperty], length(indexContexts))
+                    indexContexts  <- mmContextPairs[, kkkPair]
+                    namesContexts  <- connectionBunches[[jjProperty]][indexContexts]
 
-                connectionProbabilities[iiRow] <- min(lowMargins[paste0(connectionBunches[[jjProperty]],
-                                                                        '.', jjProperty)])
+                    valuesVar <- c(refValues[jjProperty], ferValues[jjProperty])
 
-                cntMatrixC[iiRow, ] <- apply(cntMatrixL[paste0(connectionBunches[[jjProperty]],
-                                                               '.', jjProperty), ], 2, prod)
+                    for (iiValues in seq_along(valuesVar)) {
+                        for (jjValues in seq_along(valuesVar)) {
 
-                rownames(cntMatrixC)[iiRow] <-
-                    names(connectionProbabilities)[iiRow] <-
-                    paste(c(jjProperty, connectionBunches[[jjProperty]]), collapse = '.')
+                            if (iiValues == jjValues) {
+                                connectionProbabilities[iiRow] <- min(lowMargins[
+                                    paste0(connectionBunches[[jjProperty]][indexContexts],
+                                           '.', jjProperty,
+                                           '.', valuesVar[c(iiValues, jjValues)])
+                                    ])
+                            } else {
+                                connectionProbabilities[iiRow] <- lowMargins[
+                                    paste0(connectionBunches[[jjProperty]][indexContexts][1],
+                                           '.', jjProperty, '.', valuesVar[iiValues])
+                                    ] -
+                                    min(lowMargins[
+                                        paste0(connectionBunches[[jjProperty]][indexContexts],
+                                               '.', jjProperty, '.', valuesVar[iiValues])
+                                        ])
+                            }
 
-                iiRow <- iiRow + 1
+                            cntMatrixC[iiRow, ] <- apply(cntMatrixL[paste0(connectionBunches[[jjProperty]][indexContexts],
+                                                                           '.', jjProperty,
+                                                                           '.', valuesVar[c(iiValues, jjValues)]), ], 2, prod)
+
+                            rownames(cntMatrixC)[iiRow] <-
+                                names(connectionProbabilities)[iiRow] <-
+                                paste(c(jjProperty, connectionBunches[[jjProperty]][indexContexts], valuesVar[c(iiValues, jjValues)]), collapse = '.')
+
+                            iiRow <- iiRow + 1
+                        }
+                    }
+                }
             }
         }
 
@@ -1206,11 +1759,11 @@ cntFracMatrices <- function (x) {
                     lowMargins = lowMargins, bunchProbabilities = bunchProbabilities,
                     connectionProbabilities = connectionProbabilities)
 
-        class(out) <- 'cntMatrices'
+        class(out) <- c('cntMatrices', 'cntFracMatrices')
 
         return(out)
     } else {
-        stop('x is not a divhotomous RVSystem')
+        stop('x is not a dichotomous RVSystem')
     }
 }
 
@@ -1226,7 +1779,7 @@ cntFracMatrices <- function (x) {
 #' @param x a Cnt.Meas object
 print.Cnt.Meas <- function (x) {
     if (class(x) == 'Cnt.Meas') {
-        measure <- names(x)[grep('CNT|delta', names(x))]
+        measure <- names(x)[grep('^CNT|^NCNT|^HCNT|^HNCNT|CNFR|delta', names(x))]
         print(paste0(measure, ': ', x[[measure]]))
     }
 }
@@ -1238,11 +1791,16 @@ print.Cnt.Meas <- function (x) {
 #' CbDMeasures(x) returns a list containnig the values of the (non)contextuality measures for x
 #'
 #' @param x A DRVSystem or cntMatrices object
-#' @return A list containing the values of the measures CNT1, CNT2, CNT3, NCNT2.
+#' @param hierLevels Logical. If TRUE, upper levels for CNT2h and lower levels for NCNT2h when available. Defaults to FALSE
+#' @param as.df Logical. If TRUE, return as data.frame. Defaults to FALSE
+#' @return A list containing the values of the measures CNT1, CNT2, CNT2h, CNT3, CNFR, NCNT2, NCNT2h.
 #'  If x is cyclic systems, also includes the Delta (CHSH-type) inequality and
-#'  the distance from the system to the n-dimensional rectangle
-CbDMeasures <- function (x) {
+#'  the distance from the system to the n-dimensional rectangle.
+#'  If x is a DRVSystem object (rather than a ctMatrices object), the Contextual Fraction
+#'  measure is also computed.
+CbDMeasures <- function (x, hierLevels = FALSE, as.df = FALSE) {
     if (suppressMessages(isDRVSystem(x))) {
+        y <- cntFracMatrices(x)
         x <- cntMatrices(x)
     }
 
@@ -1250,18 +1808,61 @@ CbDMeasures <- function (x) {
 
         deltaX <- suppressWarnings(try(DeltaCFunction(x), silent = TRUE))
 
+        CNT1   <- CNT1(x)
+        CNT2   <- CNT2(x)
+        CNT2h  <- CNT2h(x)
+        CNT3   <- CNT3(x)
+        NCNT2  <- NCNT2(x)
+        NCNT2h <- NCNT2h(x)
+
+        if (exists('y', inherits = FALSE)) {
+            CNFR <- CNFR(y)
+        } else {
+        }
+
         output <- list(
-            CNT1  = CNT1(x)[['CNT1']],
-            CNT2  = CNT2(x)[['CNT2']],
-            CNT3  = CNT3(x)[['CNT3']],
-            NCNT2 = NCNT2(x)[['NCNT2']]
+            CNT1   = CNT1[['CNT1']],
+            CNT2   = CNT2[['CNT2']],
+            CNT3   = CNT3[['CNT3']],
+            NCNT2  = NCNT2[['NCNT2']]
         )
+
+        if (exists('CNFR', inherits = FALSE)) {
+            output[['CNFR']] <- CNFR[['CNFR']]
+        }
 
         if (length(grep('Error', deltaX)) < 1) {
             output[['Delta']] <- deltaX[['deltaC']]
             output[['mA']] <- deltaX[['mA']]
         }
 
+        if (hierLevels) {
+            if (hasName(CNT2h, 'upperCNT2h')) {
+                CNT2hs <- c(CNT2h[['CNT2h']], CNT2h[['upperCNT2h']])
+                names(CNT2hs) <- seq(from = CNT2h[['level']], to = max(CNT2h[['upperLevels']]))
+                for (iiLevels in names(CNT2hs)) {
+                    output[[paste0('CNT2h.', iiLevels)]] <- CNT2hs[iiLevels]
+                }
+            } else {
+                output[[paste0('CNT2h.', CNT2h[['level']])]] <- CNT2h[['CNT2h']]
+            }
+            if (hasName(NCNT2h, 'lowerNCNT2h')) {
+                NCNT2hs <- NCNT2h[['lowerNCNT2h']]
+                names(NCNT2hs) <- NCNT2h[['lowerLevels']]
+                for (iiLevels in names(NCNT2hs)) {
+                    output[[paste0('NCNT2h', '.', iiLevels)]] <- NCNT2hs[iiLevels]
+                }
+            }
+        } else {
+            output[['CNT2h']]  <- CNT2h[['CNT2h']]
+            output[['levelC']] <- CNT2h[['level']]
+            output[['NCNT2h']] <- NCNT2h[['NCNT2h']]
+            output[['levelN']] <- NCNT2h[['level']]
+        }
+
+        if (as.df) {
+            output <- data.frame(output)
+        }
 
         return(output)
 
@@ -1323,16 +1924,17 @@ cyclicRVSystem <- function (n, refTable = NULL, negTable = NULL) {
 #'
 #' @return A list with prop.tables refTable and ferTable
 generateRefFerTables <- function(product = 0.5, margin1 = 0.5, margin2 = 0.5) {
-    if (product > margin1 || product > margin2) {
+    if (round(product, 10) > round(margin1, 10) || round(product, 10) > round(margin2, 10)) {
         stop("product cell needs to have a smaller probability than each margin")
     }
-    if (product > 1 || product < 0 || margin1 > 1 || margin1 < 0 || margin2 > 1 ||
-        margin2 < 0) {
+    if (round(product, 10) > 1 || round(product, 10) < 0 ||
+        round(margin1, 10) > 1 || round(margin1, 10) < 0 ||
+        round(margin2, 10) > 1 || round(margin2, 10) < 0) {
         stop("product and margins need to be probabilities")
     }
 
-    if (product < (margin1 + margin2 - 1)) {
-        stop("product cell needs to have a larger probability than 1 minus the sum of the margins")
+    if (round(product, 10) < round(margin1 + margin2 - 1, 10)) {
+        stop("product cell needs to have a larger probability than the sum of the margins minus 1")
     }
 
     maxProd <- min(margin1, margin2)
@@ -1490,3 +2092,32 @@ generatePRBoxLikeSystem <- function(PRBoxStructure, posTable = NULL, negTable = 
     }
 }
 
+#' Create a prop.table from a set of patterns
+#'
+#' MakeJointFromPatterns(patterns) returns a prop.table with named dimensions
+#'
+#' @param patterns a matrix or data.frame of deterministic patterns. A deterministic pattern is given by an integer vector.
+#' @param namesVec optional list of names for the columns of patterns.
+MakeJointFromPatterns <- function (patterns, namesVec = NULL) {
+
+    if (!(is.matrix(patterns) | is.data.frame(patterns))) {
+        stop('patterns must be a matrix.')
+    }
+
+    if (!is.null(namesVec)) {
+        if (length(namesVec) != ncol(patterns)) {
+            warning('The number of names in namesVec should be the same as the number of columns of patterns.')
+        } else {
+            colnames(patterns) <- namesVec
+        }
+    } else {
+        if (is.null(colnames(patterns))) {
+            colnames(patterns) <- paste0('V.', seq(ncol(patterns)))
+        }
+    }
+
+    jointTable <- prop.table(table(as.data.frame(patterns)))
+
+    return(jointTable)
+
+}
